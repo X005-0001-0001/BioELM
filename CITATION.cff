@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the Zenodo DOI of the corresponding release (linked on the GitHub Releases page)."
+title: "BioELM: A Backprop-Free Language Model with Local Learning Rules"
+type: software
+authors:
+  - family-names: Zeng
+    given-names: Naiqi
+    email: X005_0001_0001@163.com
+repository-code: "https://github.com/X005-0001-0001/BioELM"
+url: "https://github.com/X005-0001-0001/BioELM"
+license: AGPL-3.0
+abstract: >-
+  BioELM is a language model trained entirely without autograd / backpropagation.
+  Learning is driven by exact online RTRL eligibility traces on a diagonally-structured,
+  selectively-gated SSM, combined with three-factor local updates and a meta-Adam rule.
+  The system is released as self-contained single-file programs and evaluated against a
+  conventional TinyGPT2 under identical wall-clock, data and hardware budgets.
+keywords:
+  - local learning
+  - RTRL
+  - no backpropagation
+  - language model
+  - biologically plausible
