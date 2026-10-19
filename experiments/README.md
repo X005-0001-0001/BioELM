@@ -13,6 +13,8 @@
 | `biolssm.py` | 实验版内核（BioLSSM / BioGSSM，含 learn-e、trace_fp16、grad_einsum16、CUDA Graph 回放器 `GraphStepRunner` 与快照/还原） |
 | `gtf2.py` | 对手 TinyGPT2（标准反传；仅用于对照） |
 | `gen_qa.py` | 从检查点生成样例 |
+| `deep_bench.py` | 深度对照台（循环深度 [D1] / 层监督堆叠 / 反馈对齐，r1/r2/r3） |
+| `bench_elastic.py` | 弹性深度台（固定K / 随机K / 一致性 λ，anytime@K=1..6，r1/r2） |
 | `data2.py` + `../bio_lm_v1/data.py` | 数据流工具（`to_streams` 等） |
 
 依赖：`torch`、`tokenizers`（构建数据集用）。
