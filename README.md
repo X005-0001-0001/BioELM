@@ -47,6 +47,11 @@ RL / GRPO / rejection sampling / long-dialogue splitting). Versions: see
 核心变化是**免手调**——学习率由模型自身尺度（参数 RMS × 无量纲 ρ）派生并被损失反馈保守调速，
 换模型规模/换奖励形状不改配置（CPU 三尺度验证：同配置落在各尺度手调最优 ±0.04 CE 内）。
 
+深度分支（deep 1.0.x）：[D1] **循环深度**——同一 token 积分 K 次后再读出/学习，权重共享、零新增参数，
+由精确在线 RTRL 原生覆盖。CPU 同协议 500 条：K=1: 4.599 → K=2: 4.453 → K=4: 4.299（val CE）；
+同期实测**层监督堆叠**（L2: 4.713）与**反馈对齐**（L2: 5.659）均劣于单层——深度靠"时间上的循环"
+而不是"参数上的堆叠"（见下方 deep 版本表与 `experiments/deep_bench.py`）。
+
 复现口径与实验矩阵见 [`experiments/README.md`](experiments/README.md)。
 
 ---
@@ -78,6 +83,10 @@ python bioelm_elite_1.1.4.py
 
 # Linux / WSL（带 LINUX_* 加速块：分配器 / 线程 / TF32 / 实验性单步编译，均可关）
 python bioelm_elitelinux_1.1.4.py
+
+# 深度分支（循环深度探索线 1.0.x；内核 = 自校准 1.1.4 + [D1] 循环深度）
+python bioelm_deep_1.0.0.py
+python bioelm_deeplinux_1.0.0.py
 ```
 
 仓库根目录**已自带**训练所需文件（`tokenizer_v63b4000.*` 与 `dsr1_v5_0001.jsonl`），
@@ -114,6 +123,8 @@ python bioelm_elitelinux_1.1.4.py
 BioELM/
 ├── bioelm_elite_1.1.4.py        # 单文件产品（通用版）
 ├── bioelm_elitelinux_1.1.4.py   # 单文件产品（Linux/WSL 加速版）
+├── bioelm_deep_1.0.0.py         # 深度分支产品（[D1] 循环深度）
+├── bioelm_deeplinux_1.0.0.py    # 深度分支产品（[D1] 循环深度，Linux/WSL 加速版）
 ├── tokenizer_v63b4000.bin       # 词表（tokenizers 格式）
 ├── tokenizer_v63b4000_tokenizer.json
 ├── dsr1_v5_0001.jsonl           # 对话 QA 训练语料（3000 条）
@@ -122,6 +133,7 @@ BioELM/
 │   ├── qa_lm.py                 #   BioELM vs TinyGPT2 同墙钟对决
 │   ├── biolssm.py               #   实验版内核
 │   ├── gtf2.py                  #   TinyGPT2 对手（标准反传）
+│   ├── deep_bench.py            #   深度对照台（循环深度/层堆叠/反馈对齐消融）
 │   └── gen_qa.py                #   生成采样
 └── bio_lm_v1/data.py            # 实验依赖（词表词库工具）
 ```
@@ -149,6 +161,8 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 
 ## 版本历史
 
+### elite / elitelinux 主线（1.1.x）
+
 | 版本 | 关键变化 | 训练吞吐 | 备注 |
 |---|---|---|---|
 | **1.1.0** | 内核初版：O1–O4（去同步 / foreach 元 Adam / 评估免迹 / NLL 复用）+ 完整 11 项菜单外壳 + RL/GRPO 局部规则化 | 214 步/秒 | 菜单训练冒烟 ppl 18.97 |
@@ -156,6 +170,17 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 | **1.1.2** | [O7] 资格迹 `eK` 改 **fp16 存储 + fp32 累加归约**（profiler 定位迹更新占 GPU 时间 86%、带宽受限） | 323 步/秒（受控 +21~24%） | 240s/600s 质量对照无损（15.67/15.38 vs 15.88/15.45） |
 | **1.1.3** | [O8a] fp16 einsum 迹梯度 + [O8b] 批量 L1 范数 + [O9] **训练步 CUDA Graph**（同进程逐位等价三重证明，含 90k 步分块形态）+ [O10] 评估流数 8→128 | **569 步/秒**（291k tok/s） | 端到端一轮 6590 步 13.8s（477 步/秒）；评估 92k tok/s |
 | **1.1.4** | **自校准内核（消除尺度相关魔数）**：[O11] 自适应学习率（步长=s·ρ·R；损失反馈保守调速，s∈[1/8,1] 结构上不可能爆炸）+ [O12] 派生初始化（记忆半衰期 √H 替代 b_d=3.0）+ [O13] RL/GRPO 优势滚动 RMS 归一化 + [O14] 设备自适应精度 | 与 1.1.3 同档（自适应开销 GPU 上可忽略） | CPU 三尺度免调参验证：h=192 4.595 / h=384 4.619 / h=96 4.588（各尺度手调最优 ±0.04 内）；三版废弃控制器设计留档 |
+
+### deep / deeplinux 分支（1.0.x）—— 循环深度（回答"单层没潜力 / 多层必须 BP"）
+
+| 版本 | 关键变化 | 验证结果（CPU 500 条同协议，η=2e-3，h=192） | 备注 |
+|---|---|---|---|
+| **1.0.0** | [D1] **循环深度**：`LOOP_K` 次状态积分后再读出/学习（权重共享、零新增参数；RTRL 原生精确覆盖）；内核与 elite 1.1.4 逐字兼容（`LOOP_K=1` 逐位回退） | 块消融 K=1/2/3/4 → **4.599 / 4.453 / 4.369 / 4.299**；6000 步 K=2: 4.245 vs K=1: 4.440；对照：层监督堆叠 L2 4.713 / L3 5.039，FA 回投 L2 5.659；K=2 在 CPU 上开销 ≈ +13% | deep↔deeplinux 逐位一致；生成/存载/RL 冒烟通过 |
+
+深度的答案（本期实测）：**堆参数不行的，堆时间可以**——同 token 的循环积分让单层电路获得
+深度化的信用分配（资格迹积分 K 子步）与输入累积（`s_K = d^K·s + ((1−d^K)/(1−d))·g·u_raw`），
+完全不需要反传或近似回投；层堆叠（层监督/FA）在相同预算下均劣于单层。后续：K 调度、
+循环+堆叠混合、GPU 吞吐对照（见 `experiments/deep_bench.py` 复现全部对照）。
 
 最新版本请见 [Releases](https://github.com/X005-0001-0001/BioELM/releases)；每个版本的
 Release 页面由 Zenodo 自动归档并分配 DOI。
