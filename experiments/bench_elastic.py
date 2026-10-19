@@ -196,18 +196,19 @@ class ElasticNet:
     @torch.no_grad()
     def step(self, tok_col, tgt_col, st, train=True, mask=None, K=None):
         lay = self.layer
+        x = self.E[tok_col]
         if not train:
             k = self.kmax if K is None else K
-            logits, sem = lay.route(tok_col, st, k, trace=False)
+            logits, sem = lay.route(x, st, k, trace=False)
             return logits, None, None
         B = tok_col.numel()
         ar = torch.arange(B, device=DEV)
         if self.mode == 'consist' and self.kmax > 1:
             st_f = lay.clone_state(st)
             st_s = lay.clone_state(st)
-            logits, sem_f = lay.route(tok_col, st_f, self.kmax, trace=True)
+            logits, sem_f = lay.route(x, st_f, self.kmax, trace=True)
             m_short = self.rng.randint(1, self.kmax - 1)
-            logits_s, sem_s = lay.route(tok_col, st_s, m_short, trace=True)
+            logits_s, sem_s = lay.route(x, st_s, m_short, trace=True)
             e_f = torch.softmax(logits, dim=-1)
             e_f[ar, tgt_col] = e_f[ar, tgt_col] - 1.0
             e_s = torch.softmax(logits_s, dim=-1)
@@ -229,7 +230,7 @@ class ElasticNet:
             lay.copy_state_(st, st_f)
         else:
             k = self.kmax if self.mode == 'fixed' else self.rng.randint(1, self.kmax)
-            logits, sem = lay.route(tok_col, st, k, trace=True)
+            logits, sem = lay.route(x, st, k, trace=True)
             e = torch.softmax(logits, dim=-1)
             e[ar, tgt_col] = e[ar, tgt_col] - 1.0
             if mask is None:
