@@ -41,8 +41,8 @@ RL / GRPO / rejection sampling / long-dialogue splitting). Versions: see
 | 对话 QA 验证 ppl | **~16** | — | RTX 5080 240s，512 流 |
 | 长程依赖竞技场（crit-CE） | ID **0.0069** / OOD **0.7555** | ID 0.9933 / OOD 2.1333 | 同墙钟同设备 |
 
-吞吐（RTX 5080，h=512 / d=128 / m=128，约 97 万参数，512 训练流）：本版 **214 步/秒（109.6k tok/s）**；
-后续版本持续优化（见 Releases）。
+吞吐（RTX 5080，h=512 / d=128 / m=128，约 97 万参数，512 训练流）：1.1.0 = 214 步/秒（109.6k tok/s）；
+本版（1.1.1）经 [O5] 资格迹融合提速至 **282 步/秒（144.4k tok/s，+32%）**。
 
 复现口径与实验矩阵见 [`experiments/README.md`](experiments/README.md)。
 
@@ -71,10 +71,10 @@ logits = sem·headᵀ + bout
 pip install -r requirements.txt
 
 # Windows / 通用
-python bioelm_elite_1.1.0.py
+python bioelm_elite_1.1.1.py
 
 # Linux / WSL（带 LINUX_* 加速块：分配器 / 线程 / TF32 / 实验性单步编译，均可关）
-python bioelm_elitelinux_1.1.0.py
+python bioelm_elitelinux_1.1.1.py
 ```
 
 仓库根目录**已自带**训练所需文件（`tokenizer_v63b4000.*` 与 `dsr1_v5_0001.jsonl`），
@@ -103,8 +103,8 @@ python bioelm_elitelinux_1.1.0.py
 
 ```
 BioELM/
-├── bioelm_elite_1.1.0.py        # 单文件产品（通用版）
-├── bioelm_elitelinux_1.1.0.py   # 单文件产品（Linux/WSL 加速版）
+├── bioelm_elite_1.1.1.py        # 单文件产品（通用版）
+├── bioelm_elitelinux_1.1.1.py   # 单文件产品（Linux/WSL 加速版）
 ├── tokenizer_v63b4000.bin       # 词表（tokenizers 格式）
 ├── tokenizer_v63b4000_tokenizer.json
 ├── dsr1_v5_0001.jsonl           # 对话 QA 训练语料（3000 条）
@@ -142,7 +142,8 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 
 | 版本 | 关键变化 | 训练吞吐 | 备注 |
 |---|---|---|---|
-| **1.1.0** | 内核初版：O1–O4（去同步 / foreach 元 Adam / 评估免迹 / NLL 复用）+ 完整 11 项菜单外壳 + RL/GRPO 局部规则化 | 214 步/秒 | 本文件即该版本 |
+| **1.1.0** | 内核初版：O1–O4（去同步 / foreach 元 Adam / 评估免迹 / NLL 复用）+ 完整 11 项菜单外壳 + RL/GRPO 局部规则化 | 214 步/秒 | 菜单训练冒烟 ppl 18.97 |
+| **1.1.1** | [O5] 三条 (B,H,d) 资格迹融合为单张量 `eK(3,B,H,d)`：迹更新 6 算子 → 2 算子，数值等价（max｜Δloss｜=4.8e-7） | **282 步/秒**（+32%） | 菜单训练冒烟 best ppl 19.00 |
 
 最新版本请见 [Releases](https://github.com/X005-0001-0001/BioELM/releases)；每个版本的
 Release 页面由 Zenodo 自动归档并分配 DOI。
