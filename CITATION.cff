@@ -15,6 +15,9 @@ abstract: >-
   selectively-gated SSM, combined with three-factor local updates and a meta-Adam rule.
   The system is released as self-contained single-file programs and evaluated against a
   conventional TinyGPT2 under identical wall-clock, data and hardware budgets.
+  Since v1.1.4 the kernel is self-calibrating: the update scale is derived from the model's own
+  parameter RMS, conservatively governed by loss feedback (structurally bounded, no hand-tuned
+  learning rates across model scales).
 keywords:
   - local learning
   - RTRL

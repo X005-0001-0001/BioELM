@@ -42,9 +42,10 @@ RL / GRPO / rejection sampling / long-dialogue splitting). Versions: see
 | 长程依赖竞技场（crit-CE） | ID **0.0069** / OOD **0.7555** | ID 0.9933 / OOD 2.1333 | 同墙钟同设备 |
 
 吞吐（RTX 5080，h=512 / d=128 / m=128，约 97 万参数，512 训练流）：
-1.1.0 = 214 步/秒（O1–O4）→ 1.1.1 = 282 步/秒（O5）→ 1.1.2 = 323 步/秒（O7）→
-**本版 1.1.3 = 569 步/秒（291k tok/s；整轮端到端 477 步/秒）**，评估 92k tok/s（128 流）。
-（O8a fp16 einsum 梯度 + O9 CUDA Graph 整步回放 + O10 评估流数 8→128）
+1.1.0 = 214 → 1.1.1 = 282 → 1.1.2 = 323 → 1.1.3 = **569 步/秒**（291k tok/s；评估 92k tok/s）。
+**本版 1.1.4 = 自校准内核**（O11–O14）：自适应开销在 GPU 上可忽略，吞吐基准线与 1.1.3 同档；
+核心变化是**免手调**——学习率由模型自身尺度（参数 RMS × 无量纲 ρ）派生并被损失反馈保守调速，
+换模型规模/换奖励形状不改配置（CPU 三尺度验证：同配置落在各尺度手调最优 ±0.04 CE 内）。
 
 复现口径与实验矩阵见 [`experiments/README.md`](experiments/README.md)。
 
@@ -54,7 +55,7 @@ RL / GRPO / rejection sampling / long-dialogue splitting). Versions: see
 
 ```
 g = σ(x·Wg + bg)          # 选择性写入门
-d = σ(x·Wd + bd)          # 选择性地漏（初始 b_d=3.0，默认近似恒定记忆）
+d = σ(x·Wd + bd)          # 选择性地漏（[O12] 初始半衰期 √H 步：d0=1−ln2/√H，近似恒定记忆）
 s_t = d ⊙ s_{t-1} + g ⊙ (B·x)     # 对角线性状态推进
 sem = σ(s·Wp + bp)        # 读出瓶颈
 logits = sem·headᵀ + bout
@@ -73,10 +74,10 @@ logits = sem·headᵀ + bout
 pip install -r requirements.txt
 
 # Windows / 通用
-python bioelm_elite_1.1.3.py
+python bioelm_elite_1.1.4.py
 
 # Linux / WSL（带 LINUX_* 加速块：分配器 / 线程 / TF32 / 实验性单步编译，均可关）
-python bioelm_elitelinux_1.1.3.py
+python bioelm_elitelinux_1.1.4.py
 ```
 
 仓库根目录**已自带**训练所需文件（`tokenizer_v63b4000.*` 与 `dsr1_v5_0001.jsonl`），
@@ -95,8 +96,10 @@ python bioelm_elitelinux_1.1.3.py
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `STREAMS_CUDA` | `512` | 训练并行流数（喂饱 GPU 的主旋钮；质量按 512 标定） |
-| `BIO_H / BIO_D / BIO_M` | `512/128/128` | 状态单元 / 感官维度 / 读出瓶颈（H=768 时建议 η 降到 1e-3） |
-| `LEARNING_RATE` | `2e-3` | 局部规则元学习率 η（内核域标定值） |
+| `BIO_H / BIO_D / BIO_M` | `512/128/128` | 状态单元 / 感官维度 / 读出瓶颈（[O12] 后换尺寸无需再调 η） |
+| `ADAPT_RATE` | `True` | [O11] 自适应学习率：步长 = `s·ρ·R`（R=全体参数 RMS 自派生；s∈[1/8,1] 由损失反馈保守调速） |
+| `TRUST_RHO` | `5e-3` | [O11] 无量纲信赖域半径（= 已标定 η/R 口径；换规模不改） |
+| `LEARNING_RATE` | `2e-3` | 基准学习率（接口/回退用；`ADAPT_RATE=True` 时无需手调，`False` 回退固定步长） |
 | `GRAPH_STEP` | `True` | 训练步 CUDA Graph 整步回放（免 Python 派发；与 eager 逐位等价，失败自动回退） |
 | `TRACE_FP16` | `True` | 资格迹 fp16 存储（fp32 归约；带宽减半，长程 A/B 无损；False 回退全 fp32） |
 | `GRAD_EINSUM16` | `True` | 迹梯度 fp16 einsum 归约（4.2× 提速；关则回退 fp32 累加路径） |
@@ -109,8 +112,8 @@ python bioelm_elitelinux_1.1.3.py
 
 ```
 BioELM/
-├── bioelm_elite_1.1.3.py        # 单文件产品（通用版）
-├── bioelm_elitelinux_1.1.3.py   # 单文件产品（Linux/WSL 加速版）
+├── bioelm_elite_1.1.4.py        # 单文件产品（通用版）
+├── bioelm_elitelinux_1.1.4.py   # 单文件产品（Linux/WSL 加速版）
 ├── tokenizer_v63b4000.bin       # 词表（tokenizers 格式）
 ├── tokenizer_v63b4000_tokenizer.json
 ├── dsr1_v5_0001.jsonl           # 对话 QA 训练语料（3000 条）
@@ -152,6 +155,7 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 | **1.1.1** | [O5] 三条 (B,H,d) 资格迹融合为单张量 `eK(3,B,H,d)`：迹更新 6 算子 → 2 算子，数值等价（max｜Δloss｜=4.8e-7） | 282 步/秒（+32%） | 菜单训练冒烟 best ppl 19.00 |
 | **1.1.2** | [O7] 资格迹 `eK` 改 **fp16 存储 + fp32 累加归约**（profiler 定位迹更新占 GPU 时间 86%、带宽受限） | 323 步/秒（受控 +21~24%） | 240s/600s 质量对照无损（15.67/15.38 vs 15.88/15.45） |
 | **1.1.3** | [O8a] fp16 einsum 迹梯度 + [O8b] 批量 L1 范数 + [O9] **训练步 CUDA Graph**（同进程逐位等价三重证明，含 90k 步分块形态）+ [O10] 评估流数 8→128 | **569 步/秒**（291k tok/s） | 端到端一轮 6590 步 13.8s（477 步/秒）；评估 92k tok/s |
+| **1.1.4** | **自校准内核（消除尺度相关魔数）**：[O11] 自适应学习率（步长=s·ρ·R；损失反馈保守调速，s∈[1/8,1] 结构上不可能爆炸）+ [O12] 派生初始化（记忆半衰期 √H 替代 b_d=3.0）+ [O13] RL/GRPO 优势滚动 RMS 归一化 + [O14] 设备自适应精度 | 与 1.1.3 同档（自适应开销 GPU 上可忽略） | CPU 三尺度免调参验证：h=192 4.595 / h=384 4.619 / h=96 4.588（各尺度手调最优 ±0.04 内）；三版废弃控制器设计留档 |
 
 最新版本请见 [Releases](https://github.com/X005-0001-0001/BioELM/releases)；每个版本的
 Release 页面由 Zenodo 自动归档并分配 DOI。
