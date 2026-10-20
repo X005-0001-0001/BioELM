@@ -631,8 +631,6 @@ class BioELM:
         self._meta = {k: (torch.zeros_like(p), torch.zeros_like(p))
                       for k, p in self.params().items()}
         self.steps = 0
-        self._atp = torch.zeros((), device=DEV)   # [O1] ATP 留在 GPU，日志点才取回
-        self._atp_aux = 0.0
         self.use_foreach = _FOREACH_OK
         self._ar_cache = {}
         # [O9] 偏差校正常量张量化（CUDA Graph 捕捉安全：值由 _set_bias_factors 在回放前写入）
@@ -666,8 +664,6 @@ class BioELM:
     def n_params(self):
         return sum(t.numel() for t in self.params().values()) + self.E.numel()
 
-    def atp(self):
-        return self._atp.item() + self._atp_aux
 
     def _arange(self, B):
         t = self._ar_cache.get(B)
@@ -734,8 +730,6 @@ class BioELM:
     def _snapshot_train_state(self):
         return {
             'steps': self.steps,
-            'atp': self._atp.clone(),
-            'atp_aux': self._atp_aux,
             'params': {k: v.detach().clone() for k, v in self.params().items()},
             'E': self.E.detach().clone(),
             'meta': {k: (m[0].clone(), m[1].clone()) for k, m in self._meta.items()},
@@ -746,8 +740,6 @@ class BioELM:
 
     def _restore_train_state(self, snap):
         self.steps = snap['steps']
-        self._atp.copy_(snap['atp'])
-        self._atp_aux = snap['atp_aux']
         for k, v in self.params().items():
             v.copy_(snap['params'][k])
         self.E.copy_(snap['E'])
@@ -878,22 +870,8 @@ class BioELM:
                     st_k = upd[k].clamp(-DIR_CLAMP, DIR_CLAMP) * coef
                     steps.append(st_k)
                     p.add_(st_k, alpha=-1.0)
-                try:
-                    s_upd = sum(torch._foreach_norm(steps, ord=1))
-                except Exception:
-                    s_upd = steps[0].abs().sum()
-                    for u in steps[1:]:
-                        s_upd = s_upd + u.abs().sum()
             else:
                 torch._foreach_add_(params, upd, alpha=-self.eta)
-                # [O8b] 批量 L1 范数（一次调用替代逐个 abs().sum()）
-                try:
-                    s_upd = sum(torch._foreach_norm(upd, ord=1))
-                except Exception:
-                    s_upd = upd[0].abs().sum()
-                    for u in upd[1:]:
-                        s_upd = s_upd + u.abs().sum()
-            self._atp.add_(s_upd * 500.0)   # 仅能量记账口径（参数与训练动力学无关）
         else:
             if self.adapt:
                 coef = self._s * TRUST_RHO * self._r0
@@ -911,11 +889,8 @@ class BioELM:
                     # [O11] 逐参数信赖域（非 foreach 慢路径，同数学）
                     st_k = upd.clamp(-DIR_CLAMP, DIR_CLAMP) * coef
                     param.add_(st_k, alpha=-1.0)
-                    self._atp.add_(st_k.abs().sum() * 500.0)
                 else:
                     param.add_(upd, alpha=-self.eta)
-                    self._atp.add_(upd.abs().sum() * 500.0)
-        self._atp_aux += sum(p.numel() for p in params) * 0.5
         self.steps += 1
 
     # ---- 训练步：返回 (logits, 掩码NLL和, 计数)；[O4] NLL 复用同一次前向 ----
@@ -1345,10 +1320,10 @@ def train_from_scratch(model, tokenizer, data_path, batch_size, epochs, lr,
                             mem_str = ''
                     learned_v = float(learned_total)
                     pct_str = ' (%.1f%%)' % (learned_v * 100.0 / max(1, total_learnable))
-                    log_and_print('Epoch %d/%d Step %d/%d Loss: %.4f PPL: %.2f ATP: %.2e '
+                    log_and_print('Epoch %d/%d Step %d/%d Loss: %.4f PPL: %.2f '
                                   'ETA: %.2e Learned: %d%s%s'
                                   % (epoch + 1, epochs, epoch_steps, T, loss_v, ppl_v,
-                                     model.atp(), model.eta, int(learned_v), pct_str, mem_str))
+                                     model.eta, int(learned_v), pct_str, mem_str))
                     run_loss = torch.zeros((), device=DEV)
                     run_cnt = torch.zeros((), device=DEV)
                 if EMPTY_CACHE_INTERVAL > 0 and steps_total % EMPTY_CACHE_INTERVAL == 0 \
@@ -1384,8 +1359,8 @@ def train_from_scratch(model, tokenizer, data_path, batch_size, epochs, lr,
         return
 
     if not interrupted:
-        log_and_print('训练完成（%d 步，%.1fs，atp=%.2e）'
-                      % (steps_total, time.time() - t0_all, model.atp()))
+        log_and_print('训练完成（%d 步，%.1fs）'
+                      % (steps_total, time.time() - t0_all))
 
 
 # ============================================================
@@ -2188,7 +2163,7 @@ def main():
             log_and_print('词表大小: %d' % model.vocab)
             log_and_print('状态单元 H: %d | 感官维度 d: %d | 读出维度 m: %d | 元学习率 η: %.2e | 权重衰减: %.1e'
                           % (model.h, model.d, model.m, model.eta, model.wd))
-            log_and_print('已训练步数: %d | 能量记账 atp: %.2e | 设备: %s' % (model.steps, model.atp(), str(DEV)))
+            log_and_print('已训练步数: %d | 设备: %s' % (model.steps, str(DEV)))
             if model.adapt:
                 log_and_print('[O11] 自适应：因子 s=%.3f（界 [%.3f, %.1f]）| 反馈窗 τ=%d 步 | 损失慢迹=%.4f | ρ=%.0e'
                               % (float(model._s), CTRL_S_MIN, CTRL_S_MAX, model._win_len,
