@@ -42,6 +42,7 @@ CFG = {
     'b2': 0.99,
     'eps': 1e-6,
     'seed': 43,
+    'TAU': 1.0,
 }
 
 NV, TV = 128, 200
@@ -77,7 +78,7 @@ class Net:
         self.W_g = ((torch.rand(H, D, generator=gen) * 2 - 1) / math.sqrt(D)).to(DEV)
         self.b_g = torch.zeros(H, device=DEV)
         self.W_d = ((torch.rand(H, D, generator=gen) * 2 - 1) / math.sqrt(D)).to(DEV)
-        d0 = 1.0 - math.log(2.0) / math.sqrt(H)
+        d0 = 1.0 - math.log(2.0) / (CFG['TAU'] * math.sqrt(H))
         self.b_d = torch.full((H,), math.log(d0 / (1.0 - d0)), device=DEV)
         self.B = (torch.randn(H, D, generator=gen) / math.sqrt(D)).to(DEV)
         self.Wp = ((torch.rand(M, H, generator=gen) * 2 - 1) / math.sqrt(H)).to(DEV)
@@ -293,8 +294,9 @@ def run(cfg):
         if rot + n * CHUNK + 2 >= len(tr_ids):
             rot = 0
     dt = time.time() - t0
-    print('[K=%d mix=%s tconv=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d'
-          % (K, MIX, TCONV, SEED, CFG['steps'], dt, CFG['steps'] / dt, net.n_params()), flush=True)
+    print('[K=%d mix=%s tconv=%d TAU=%.1f seed=%d] %d steps %.1fs (%.1f st/s) params=%d'
+          % (K, MIX, TCONV, CFG['TAU'], SEED, CFG['steps'], dt, CFG['steps'] / dt,
+             net.n_params()), flush=True)
     return out
 
 
