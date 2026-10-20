@@ -301,9 +301,11 @@ def evaluate(net, ids, mask, ns, T):
 
 
 def run(cfg):
-    global K, SEED
+    global K, SEED, BD, G, H, D, M
     CFG.update(cfg)
-    K, SEED = CFG['K'], CFG['seed']
+    K, SEED, BD = CFG['K'], CFG['seed'], CFG['BD']
+    H, D, M = CFG['h'], CFG['d'], CFG['m']
+    G = H // BD
     net = Net()
     st = net.init_state(CFG['streams'])
     n = CFG['streams']
@@ -327,12 +329,16 @@ def run(cfg):
         if rot + n * CHUNK + 2 >= len(tr_ids):
             rot = 0
     dt = time.time() - t0
-    orth = float((torch.einsum('gij,gkj->gik', net.A, net.A) - net.eye[None]).abs().max())
-    rho = float(torch.linalg.svdvals(net.A).max())
-    print('[BD=%d par=%s freeze=%d proj=%d K=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f orth=%.2e rho=%.3f'
+    if bool(torch.isfinite(net.A).all()):
+        orth = float((torch.einsum('gij,gkj->gik', net.A, net.A) - net.eye[None]).abs().max())
+        rho = float(torch.linalg.svdvals(net.A).max())
+        extra = 'Adev=%.4f orth=%.2e rho=%.3f' % (
+            float((net.A - net.eye[None]).abs().max()), orth, rho)
+    else:
+        extra = 'A=NaN'
+    print('[BD=%d par=%s freeze=%d proj=%d K=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d %s'
           % (BD, CFG['BD_PARAM'], CFG['BD_FREEZE'], CFG['BD_PROJ'], K, SEED, CFG['steps'], dt,
-             CFG['steps'] / dt, net.n_params(),
-             float((net.A - net.eye[None]).abs().max()), orth, rho), flush=True)
+             CFG['steps'] / dt, net.n_params(), extra), flush=True)
     return out
 
 
