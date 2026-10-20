@@ -104,7 +104,7 @@ ULTRA_GRPO_CLIP_EPSILON = 0.2
 ULTRA_GRPO_OLD_POLICY_PENALTY = 0.01
 
 # ---- BioELM 内核 ----
-BIO_H = 256                      # 状态单元数 H（编排赛 Round 19/20/21：H>256 饱和，512 过度）
+BIO_H = 256                      # 状态单元数 H（淘汰赛 Round 19/20/21：H>256 饱和，512 过度）
 BIO_D = 192                      # 有界嵌入维度 d（Round 12/15/17：d 是最高效容量轴）
 BIO_M = 192                      # 读出瓶颈 sem 维度 m（Round 11/13：M≈H 为性价比拐点）
 BIO_BETA1 = 0.9                  # 元动量一阶
