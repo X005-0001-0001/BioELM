@@ -78,9 +78,11 @@ GPU 固定步数口径（RTX 5080，h=512，20k 步，val 掩码 CE）：
 | consist λ=1.0 | 3.306 | 3.184 | 3.120 | 3.113 | ~2.5× |
 
 240s 同墙钟（random）：52.6k 步 → @K=1 ppl 18.4 / @K=2 **15.86** / @K=3 **15.68**（同墙钟 elite 单层 15.54）。
-注：LoopFormer 式**一致性蒸馏**（consist）是**小尺度方法**——h=192 CPU 500 条时最优（@K=2 4.19 vs
-random 4.46 vs fixed K4 5.03），h=512 大尺度反而降质（见 elastic 1.1.0 发布说明负结果记录）；
-保留为可选模式。复现：`experiments/bench_elastic.py`（小尺度）与 `experiments/bench_elastic_gpu.py`（大尺度）。
+注：LoopFormer 式**一致性蒸馏**（consist）实为**短训练加速器**：3k 步内全档更优
+（h=192：K1/K2 3.560/3.485 vs random 3.685/3.508），20k 步渐近反超
+（K2 3.315 vs 3.140）；h=192 与 h=512 同向——决定变量是**训练时长**而非模型宽度
+（冷热启动对照见 `expr-horizon` 分支），故保留为短预算/微调场景选项。
+复现：`experiments/bench_elastic.py`（小尺度）与 `experiments/bench_elastic_gpu.py`（大尺度）。
 
 复现口径与实验矩阵见 [`experiments/README.md`](experiments/README.md)。
 
