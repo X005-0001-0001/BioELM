@@ -30,3 +30,23 @@
 （DistRng 包装 `_loop_rng`，零侵入）。
 
 复现：`python experiments/bench_depthdist.py`（GPU）。
+
+---
+
+## 墙钟检验（240s，h=512，全语料，KMAX=4，random）
+
+| 训练先验 | 240s 步数 | @K=1 | @K=2 | @K=3 | @K=4 |
+|---|---|---|---|---|---|
+| uniform（已知） | 52,640 | 2.9104 | 2.7645 | **2.7533** | **2.7911** |
+| shallow（几何，DistRng） | 50,960 | **2.7807** | **2.7369** | 2.7977 | 2.8798 |
+| shallow（产品 1.1.1） | 41,824 | 2.8131 | 2.7949 | 2.8588 | 2.9407 |
+
+结论：墙钟下浅偏依然大幅改善低预算（即使产品级复验步数少 20%，@K1 仍比 uniform 好 ~0.10），
+代价在中深预算（@K3/K4 +0.04~0.09）。先验是**按预算选档**的零成本旋钮，不是全局更优。
+
+## 产品化
+
+已作为 [E2] 进入 **elastic 1.1.1**：`LOOP_DEPTH_PRIOR = 'uniform' | 'shallow' | 'deep'`
+（产品采样均值实测 uniform 2.513 / shallow 1.730 / deep 3.002；双胞胎逐位一致、存载零差）。
+
+复现：`python experiments/bench_depthdist.py`（先验对照）、产品脚本 `bioelm_elastic_1.1.1.py`。
