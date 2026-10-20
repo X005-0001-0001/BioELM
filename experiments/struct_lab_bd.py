@@ -26,6 +26,7 @@ CFG = {
     'BD': 4,
     'BD_FREEZE': 0,
     'BD_PROJ': 1,
+    'BD_PARAM': 'free',
     'h': 192,
     'd': 48,
     'm': 48,
@@ -82,15 +83,21 @@ class Net:
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
         self.A = torch.eye(BD, device=DEV).repeat(G, 1, 1)
+        self.W = torch.zeros(G, BD, BD, device=DEV)
         self.eye = torch.eye(BD, device=DEV)
         self.t = 0
         self._meta = {k: (torch.zeros_like(v), torch.zeros_like(v))
                       for k, v in self.params().items()}
 
     def params(self):
-        return {'W_g': self.W_g, 'b_g': self.b_g, 'W_d': self.W_d, 'b_d': self.b_d,
-                'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head,
-                'bout': self.bout, 'A': self.A}
+        d = {'W_g': self.W_g, 'b_g': self.b_g, 'W_d': self.W_d, 'b_d': self.b_d,
+             'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head,
+             'bout': self.bout}
+        if CFG['BD_PARAM'] == 'cayley':
+            d['W'] = self.W
+        else:
+            d['A'] = self.A
+        return d
 
     def n_params(self):
         return sum(v.numel() for v in self.params().values()) + self.E.numel()
@@ -141,7 +148,7 @@ class Net:
             eA.copy_(torch.einsum('bgijk,gkc->bgijc', eA, self.A)
                      .mul(d.view(-1, G, BD).unsqueeze(2).unsqueeze(2))
                      + Sg.unsqueeze(-1).unsqueeze(-1) * d.view(-1, G, 1, 1, BD)
-                     * self.eye[None, None, :, :, None])
+                     * self.eye[None, None, None, :, :])
         return logits, sem
 
     @torch.no_grad()
@@ -181,7 +188,16 @@ class Net:
             ('bout', e.sum(0)),
         ]
         if not CFG['BD_FREEZE']:
-            grads.append(('A', torch.einsum('bgc,bgijc->gij', Ls.view(-1, G, BD), st['eA'])))
+            gA = torch.einsum('bgc,bgijc->gij', Ls.view(-1, G, BD), st['eA'])
+            if CFG['BD_PARAM'] == 'cayley':
+                # A = (I-W)(I+W)^-1；dA = -2 B dW B，B=(I+W)^-1
+                eye = self.eye.unsqueeze(0).expand(G, BD, BD)
+                Bm = torch.linalg.solve(eye + self.W, eye)
+                Cm = torch.einsum('gik,gij,gjl->gkl', Bm.transpose(1, 2), gA, Bm.transpose(1, 2))
+                gW = -2.0 * Cm
+                grads.append(('W', 0.5 * (gW - gW.transpose(1, 2))))
+            else:
+                grads.append(('A', gA))
         self._apply(grads)
 
     @torch.no_grad()
@@ -206,6 +222,10 @@ class Net:
         if p2:
             torch._foreach_mul_(p2, 1.0 - CFG['wd'])
         torch._foreach_add_(ps, upd, alpha=-CFG['eta'])
+        if CFG['BD_PARAM'] == 'cayley' and 'W' in names:
+            self.W.copy_(0.5 * (self.W - self.W.transpose(1, 2)))
+            eye = self.eye.unsqueeze(0).expand(G, BD, BD)
+            self.A.copy_(torch.linalg.solve(eye + self.W, eye - self.W))
         if CFG.get('BD_PROJ') and 'A' in names:
             self._project_A()
 
@@ -265,9 +285,11 @@ def run(cfg):
         if rot + n * CHUNK + 2 >= len(tr_ids):
             rot = 0
     dt = time.time() - t0
-    print('[BD=%d freeze=%d proj=%d K=%d TAU=%.1f seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f'
-          % (BD, CFG['BD_FREEZE'], CFG['BD_PROJ'], K, CFG['TAU'], SEED, CFG['steps'], dt,
-             CFG['steps'] / dt, net.n_params(), float((net.A - net.eye[None]).abs().max())), flush=True)
+    orth = float((torch.einsum('gij,gkj->gik', net.A, net.A) - net.eye[None]).abs().max())
+    print('[BD=%d par=%s freeze=%d proj=%d K=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f orth=%.2e'
+          % (BD, CFG['BD_PARAM'], CFG['BD_FREEZE'], CFG['BD_PROJ'], K, SEED, CFG['steps'], dt,
+             CFG['steps'] / dt, net.n_params(),
+             float((net.A - net.eye[None]).abs().max()), orth), flush=True)
     return out
 
 
