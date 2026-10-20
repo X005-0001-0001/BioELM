@@ -84,7 +84,10 @@ class Net:
         self.bout = torch.zeros(VOCAB, device=DEV)
         self.A = torch.eye(BD, device=DEV).repeat(G, 1, 1)
         self.W = torch.zeros(G, BD, BD, device=DEV)
+        self.nu_raw = torch.full((G,), -8.0, device=DEV)
         self.eye = torch.eye(BD, device=DEV)
+        if CFG['BD_PARAM'] != 'free':
+            self._rebuild_A()
         self.t = 0
         self._meta = {k: (torch.zeros_like(v), torch.zeros_like(v))
                       for k, v in self.params().items()}
@@ -93,10 +96,12 @@ class Net:
         d = {'W_g': self.W_g, 'b_g': self.b_g, 'W_d': self.W_d, 'b_d': self.b_d,
              'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head,
              'bout': self.bout}
-        if CFG['BD_PARAM'] == 'cayley':
-            d['W'] = self.W
-        else:
+        if CFG['BD_PARAM'] == 'free':
             d['A'] = self.A
+        else:
+            d['W'] = self.W
+        if CFG['BD_PARAM'] in ('expm', 'rot'):
+            d['nu_raw'] = self.nu_raw
         return d
 
     def n_params(self):
@@ -110,6 +115,21 @@ class Net:
             'e_bd': torch.zeros(batch, H, device=DEV),
             'eA': torch.zeros(batch, G, BD, BD, BD, device=DEV),
         }
+
+    @torch.no_grad()
+    def _rebuild_A(self):
+        eye = self.eye.unsqueeze(0).expand(G, BD, BD)
+        if CFG['BD_PARAM'] == 'cayley':
+            self.A.copy_(torch.linalg.solve(eye + self.W, eye - self.W))
+        elif CFG['BD_PARAM'] == 'expm':
+            nu = torch.nn.functional.softplus(self.nu_raw)
+            skew = 0.5 * (self.W - self.W.transpose(1, 2))
+            Om = -nu.view(-1, 1, 1) * eye + skew
+            self.A.copy_(torch.matrix_exp(Om))
+        elif CFG['BD_PARAM'] == 'rot':
+            nu = torch.nn.functional.softplus(self.nu_raw)
+            Cm = torch.linalg.solve(eye + self.W, eye - self.W)
+            self.A.copy_(torch.exp(-nu).view(-1, 1, 1) * Cm)
 
     @torch.no_grad()
     def _project_A(self):
@@ -196,6 +216,29 @@ class Net:
                 Cm = torch.einsum('gik,gij,gjl->gkl', Bm.transpose(1, 2), gA, Bm.transpose(1, 2))
                 gW = -2.0 * Cm
                 grads.append(('W', 0.5 * (gW - gW.transpose(1, 2))))
+            elif CFG['BD_PARAM'] == 'rot':
+                eye = self.eye.unsqueeze(0).expand(G, BD, BD)
+                nu = torch.nn.functional.softplus(self.nu_raw)
+                Bm = torch.linalg.solve(eye + self.W, eye)
+                gC = torch.exp(-nu).view(-1, 1, 1) * gA
+                Cm = torch.einsum('gik,gij,gjl->gkl', Bm.transpose(1, 2), gC, Bm.transpose(1, 2))
+                gW = -2.0 * Cm
+                grads.append(('W', 0.5 * (gW - gW.transpose(1, 2))))
+                grads.append(('nu_raw', -(gA * self.A).sum(dim=(1, 2))
+                              * torch.sigmoid(self.nu_raw)))
+            elif CFG['BD_PARAM'] == 'expm':
+                # A = exp(-nu I + skew(W))；gOmega = Frechet（块矩阵指数）
+                eye = self.eye.unsqueeze(0).expand(G, BD, BD)
+                nu = torch.nn.functional.softplus(self.nu_raw)
+                Om = (-nu.view(-1, 1, 1) * eye + 0.5 * (self.W - self.W.transpose(1, 2)))
+                Ot = Om.transpose(1, 2)
+                zeros = torch.zeros(G, BD, BD, device=DEV)
+                blk = torch.cat([torch.cat([Ot, gA], dim=2),
+                                 torch.cat([zeros, Ot], dim=2)], dim=1)
+                gOm = torch.matrix_exp(blk)[:, :BD, BD:]
+                grads.append(('W', 0.5 * (gOm - gOm.transpose(1, 2))))
+                grads.append(('nu_raw', -torch.diagonal(gOm, dim1=1, dim2=2).sum(-1)
+                              * torch.sigmoid(self.nu_raw)))
             else:
                 grads.append(('A', gA))
         self._apply(grads)
@@ -222,10 +265,9 @@ class Net:
         if p2:
             torch._foreach_mul_(p2, 1.0 - CFG['wd'])
         torch._foreach_add_(ps, upd, alpha=-CFG['eta'])
-        if CFG['BD_PARAM'] == 'cayley' and 'W' in names:
+        if CFG['BD_PARAM'] != 'free' and ('W' in names or 'nu_raw' in names):
             self.W.copy_(0.5 * (self.W - self.W.transpose(1, 2)))
-            eye = self.eye.unsqueeze(0).expand(G, BD, BD)
-            self.A.copy_(torch.linalg.solve(eye + self.W, eye - self.W))
+            self._rebuild_A()
         if CFG.get('BD_PROJ') and 'A' in names:
             self._project_A()
 
@@ -286,10 +328,11 @@ def run(cfg):
             rot = 0
     dt = time.time() - t0
     orth = float((torch.einsum('gij,gkj->gik', net.A, net.A) - net.eye[None]).abs().max())
-    print('[BD=%d par=%s freeze=%d proj=%d K=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f orth=%.2e'
+    rho = float(torch.linalg.svdvals(net.A).max())
+    print('[BD=%d par=%s freeze=%d proj=%d K=%d seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f orth=%.2e rho=%.3f'
           % (BD, CFG['BD_PARAM'], CFG['BD_FREEZE'], CFG['BD_PROJ'], K, SEED, CFG['steps'], dt,
              CFG['steps'] / dt, net.n_params(),
-             float((net.A - net.eye[None]).abs().max()), orth), flush=True)
+             float((net.A - net.eye[None]).abs().max()), orth, rho), flush=True)
     return out
 
 
