@@ -123,9 +123,9 @@ python bioelm_elitelinux_1.1.5.py
 python bioelm_deep_1.1.0.py
 python bioelm_deeplinux_1.1.0.py
 
-# 弹性深度分支（1.1.x；顶部 LOOP_* 控制区：K_MAX/训练模式/一致性 λ/推理预算 K）
-python bioelm_elastic_1.1.0.py
-python bioelm_elasticlinux_1.1.0.py
+# 弹性深度分支（1.1.x；顶部 LOOP_* 控制区：K_MAX/训练模式/深度先验/一致性 λ/推理预算 K）
+python bioelm_elastic_1.1.1.py
+python bioelm_elasticlinux_1.1.1.py
 ```
 
 仓库根目录**已自带**训练所需文件（`tokenizer_v63b4000.*` 与 `dsr1_v5_0001.jsonl`），
@@ -164,8 +164,8 @@ BioELM/
 ├── bioelm_elitelinux_1.1.5.py   # 单文件产品（Linux/WSL 加速版）
 ├── bioelm_deep_1.1.0.py         # 深度分支产品（[D1] 循环深度 + [D2] 子步时间条件）
 ├── bioelm_deeplinux_1.1.0.py    # 深度分支产品（[D1]+[D2]，Linux/WSL 加速版）
-├── bioelm_elastic_1.1.0.py      # 弹性深度分支产品（[E1] 弹性预算，默认深度随机化）
-├── bioelm_elasticlinux_1.1.0.py # 弹性深度分支产品（Linux/WSL 加速版）
+├── bioelm_elastic_1.1.1.py      # 弹性深度分支产品（[E1] 弹性预算 + [E2] 深度先验）
+├── bioelm_elasticlinux_1.1.1.py # 弹性深度分支产品（Linux/WSL 加速版）
 ├── tokenizer_v63b4000.bin       # 词表（tokenizers 格式）
 ├── tokenizer_v63b4000_tokenizer.json
 ├── dsr1_v5_0001.jsonl           # 对话 QA 训练语料（3000 条）
@@ -234,11 +234,12 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 |---|---|---|---|
 | **1.0.0** | [E1] **弹性深度**：每训练步同时走完整路线（K_MAX 次积分，CE）与捷径路线（M~U{1..K_MAX−1} 次积分，CE + 一致性蒸馏 `½‖sem_s−sg(sem_f)‖²`）。stop-grad 天然成立，一致性梯度恰为三因子局部形式；顶部 `LOOP_K_MAX / LOOP_TRAIN_MODE / LOOP_CONSIST_LAMBDA / LOOP_K` 四旋钮 | CPU 500 条，h=192，3000 步（anytime @K=1..6）：一致性 **4.354 / 4.194 / 4.172 / 4.178 / 4.189 / 4.204**；固定 K=4 基线 5.033 / 4.525 / 4.353 / 4.299 / 4.286 / 4.290；随机K仅CE 4.651 / 4.509 / 4.474 / 4.468 / 4.474 / 4.487 | 小尺度上任何预算全档优于朴素早退；λ∈[1,3] 宽平顶；含 [O11-修] |
 | **1.1.0** | **默认训练模式 consist → random（深度随机化）**：GPU 大尺度(20k 步 h=512)下 random 每步与每墙钟全档最优（K1/K2 3.002/2.846 vs consist 3.306/3.184），成本仅 ~1.07×；consist 降级为小尺度可选模式（负结果记录：λ→0 仍差于 random，更新率减半亦无效） | 240s 同墙钟：52.6k 步 → @K=1 ppl 18.4 / @K=2 **15.86** / @K=3 **15.68**（elite 单层同墙钟 15.54） | 一条模型提供从轻到深的整族预算；复现 `bench_elastic_gpu.py` |
+| **1.1.1** | [E2] **训练深度先验**：`LOOP_DEPTH_PRIOR` = uniform（默认）/ shallow（P∝2⁻ᵏ，适 K1/K2）/ deep（P∝k，适 K3/K4）——按目标推理预算选档，零额外成本 | h=192 20k 步 @K1..4：uniform 3.301/3.140/3.115/3.140；shallow **3.157/3.105**/3.146/3.205；deep 3.411/3.150/**3.093/3.107**。240s 墙钟 shallow @K1 2.813（41.8k 步）vs uniform 2.910（52.6k 步） | 同均值 bimodal 劣于 uniform（形状非关键，质量点分布才是） |
 
 弹性深度的用法：训练完一个模型后，推理时只需改顶部 `LOOP_K`（1..K_MAX 任意），无需重训——
 "一条训练好的网络里住着从 1 层到 K_MAX 层的整族模型"。已验证的负结果：学习型停机（语义收敛=
 固定深度平价、熵判据无信号）、子步时间条件（anytime 下伤浅预算）、K 调度曲线（均劣于固定 K_MAX）——
-详见 `expr-*` 实验分支。按目标预算选训练深度先验（浅偏/深偏/均匀）是零成本旋钮（`expr-depthdist`）。
+详见 `expr-*` 实验分支。按目标预算选训练深度先验（`LOOP_DEPTH_PRIOR`：uniform/shallow/deep）是零成本旋钮（见 1.1.1 说明与 `expr-depthdist`）。
 复现：`experiments/bench_elastic.py`。
 
 最新版本请见 [Releases](https://github.com/X005-0001-0001/BioELM/releases)；每个版本的
