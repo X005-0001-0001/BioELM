@@ -25,6 +25,7 @@ CFG = {
     'K': 2,
     'BD': 4,
     'BD_FREEZE': 0,
+    'BD_PROJ': 1,
     'h': 192,
     'd': 48,
     'm': 48,
@@ -102,6 +103,18 @@ class Net:
             'e_bd': torch.zeros(batch, H, device=DEV),
             'eA': torch.zeros(batch, G, BD, BD, BD, device=DEV),
         }
+
+    @torch.no_grad()
+    def _project_A(self):
+        """每组 A_g 投影到谱范数 <= 1（幂迭代），保证 diag(d)A 的谱半径 <= max(d) < 1。"""
+        v = (torch.arange(1, BD + 1, device=DEV, dtype=torch.float32)
+             / math.sqrt(sum(i * i for i in range(1, BD + 1))))
+        v = v.unsqueeze(0).expand(G, BD).clone()
+        for _ in range(6):
+            w = torch.einsum('gij,gj->gi', self.A, v)
+            v = w / w.norm(dim=-1, keepdim=True).clamp(min=1e-12)
+        sigma = torch.einsum('gij,gj->gi', self.A, v).norm(dim=-1)
+        self.A.mul_((1.0 / sigma.clamp(min=1.0)).view(-1, 1, 1))
 
     @torch.no_grad()
     def _cell(self, x, st, trace):
@@ -193,6 +206,8 @@ class Net:
         if p2:
             torch._foreach_mul_(p2, 1.0 - CFG['wd'])
         torch._foreach_add_(ps, upd, alpha=-CFG['eta'])
+        if CFG.get('BD_PROJ') and 'A' in names:
+            self._project_A()
 
 
 def to_batches(ids, mask, ns, T, rotate):
@@ -250,9 +265,9 @@ def run(cfg):
         if rot + n * CHUNK + 2 >= len(tr_ids):
             rot = 0
     dt = time.time() - t0
-    print('[BD=%d freeze=%d K=%d TAU=%.1f seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f'
-          % (BD, CFG['BD_FREEZE'], K, CFG['TAU'], SEED, CFG['steps'], dt, CFG['steps'] / dt,
-             net.n_params(), float((net.A - net.eye[None]).abs().max())), flush=True)
+    print('[BD=%d freeze=%d proj=%d K=%d TAU=%.1f seed=%d] %d steps %.1fs (%.1f st/s) params=%d Adev=%.4f'
+          % (BD, CFG['BD_FREEZE'], CFG['BD_PROJ'], K, CFG['TAU'], SEED, CFG['steps'], dt,
+             CFG['steps'] / dt, net.n_params(), float((net.A - net.eye[None]).abs().max())), flush=True)
     return out
 
 
