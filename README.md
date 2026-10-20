@@ -67,12 +67,20 @@ K=2 ppl 22.79、K=4 ppl 21.57。其价值在**推理预算弹性**（一条模�
 同期实测**层监督堆叠**（L2: 4.713）与**反馈对齐**（L2: 5.659）均劣于单层——深度靠"时间上的循环"
 而不是"参数上的堆叠"（见下方 deep 版本表与 `experiments/deep_bench.py`）。
 
-弹性深度分支（elastic 1.0.x）：[E1] **LoopFormer 式变长轨迹 + 捷径一致性蒸馏**，训练零 autograd
-（stop-grad 天然成立，一致性梯度恰为三因子局部形式）。推理预算 K 任意指定、无需重训：
-CPU 同协议 3000 步 anytime val CE @K=1..6 = **4.354 / 4.194 / 4.172 / 4.178 / 4.189 / 4.204**
-（同产品固定 K=4 基线 5.033/4.525/4.353/**4.299**/4.286/4.290）——任何预算都优于朴素早退，
-K=2–4 为宽平顶（K=3 4.172 最优），K=5/6 外推平滑。训练开销约 2.2×（每步完整+捷径两条路线），
-推理按预算 K 定（见下方 elastic 版本表与 `experiments/bench_elastic.py`）。
+弹性深度分支（elastic 1.x）：[E1] **弹性深度**——一条模型，推理预算 K 任意指定（1..K_MAX）、无需重训。
+1.1.0 起默认训练模式为**深度随机化**（random：每步随机深度仅 CE，单路线）。
+GPU 固定步数口径（RTX 5080，h=512，20k 步，val 掩码 CE）：
+
+| 模式 | @K=1 | @K=2 | @K=3 | @K=4 | 每步成本 |
+|---|---|---|---|---|---|
+| **random（默认）** | **3.002** | **2.846** | **2.821** | 2.847 | ~1.07× |
+| fixed K4 | 3.980 | 3.135 | 2.879 | **2.822** | ~1.5× |
+| consist λ=1.0 | 3.306 | 3.184 | 3.120 | 3.113 | ~2.5× |
+
+240s 同墙钟（random）：52.6k 步 → @K=1 ppl 18.4 / @K=2 **15.86** / @K=3 **15.68**（同墙钟 elite 单层 15.54）。
+注：LoopFormer 式**一致性蒸馏**（consist）是**小尺度方法**——h=192 CPU 500 条时最优（@K=2 4.19 vs
+random 4.46 vs fixed K4 5.03），h=512 大尺度反而降质（见 elastic 1.1.0 发布说明负结果记录）；
+保留为可选模式。复现：`experiments/bench_elastic.py`（小尺度）与 `experiments/bench_elastic_gpu.py`（大尺度）。
 
 复现口径与实验矩阵见 [`experiments/README.md`](experiments/README.md)。
 
@@ -110,9 +118,9 @@ python bioelm_elitelinux_1.1.5.py
 python bioelm_deep_1.0.1.py
 python bioelm_deeplinux_1.0.1.py
 
-# 弹性深度分支（变长轨迹 + 捷径一致性 1.0.x；顶部 LOOP_* 控制区：K_MAX/模式/λ/推理预算 K）
-python bioelm_elastic_1.0.0.py
-python bioelm_elasticlinux_1.0.0.py
+# 弹性深度分支（1.1.x；顶部 LOOP_* 控制区：K_MAX/训练模式/一致性 λ/推理预算 K）
+python bioelm_elastic_1.1.0.py
+python bioelm_elasticlinux_1.1.0.py
 ```
 
 仓库根目录**已自带**训练所需文件（`tokenizer_v63b4000.*` 与 `dsr1_v5_0001.jsonl`），
@@ -151,8 +159,8 @@ BioELM/
 ├── bioelm_elitelinux_1.1.5.py   # 单文件产品（Linux/WSL 加速版）
 ├── bioelm_deep_1.0.1.py         # 深度分支产品（[D1] 循环深度）
 ├── bioelm_deeplinux_1.0.1.py    # 深度分支产品（[D1] 循环深度，Linux/WSL 加速版）
-├── bioelm_elastic_1.0.0.py      # 弹性深度分支产品（[E1] 变长轨迹+一致性）
-├── bioelm_elasticlinux_1.0.0.py # 弹性深度分支产品（Linux/WSL 加速版）
+├── bioelm_elastic_1.1.0.py      # 弹性深度分支产品（[E1] 弹性预算，默认深度随机化）
+├── bioelm_elasticlinux_1.1.0.py # 弹性深度分支产品（Linux/WSL 加速版）
 ├── tokenizer_v63b4000.bin       # 词表（tokenizers 格式）
 ├── tokenizer_v63b4000_tokenizer.json
 ├── dsr1_v5_0001.jsonl           # 对话 QA 训练语料（3000 条）
@@ -162,7 +170,8 @@ BioELM/
 │   ├── biolssm.py               #   实验版内核
 │   ├── gtf2.py                  #   TinyGPT2 对手（标准反传）
 │   ├── deep_bench.py            #   深度对照台（循环深度/层堆叠/反馈对齐消融）
-│   ├── bench_elastic.py         #   弹性深度台（固定K/随机K/一致性 anytime 评估）
+│   ├── bench_elastic.py         #   弹性深度台（固定K/随机K/一致性 anytime 评估，小尺度）
+│   ├── bench_elastic_gpu.py     #   弹性深度 GPU 台（模式对照：每步质量与每步成本）
 │   └── gen_qa.py                #   生成采样
 └── bio_lm_v1/data.py            # 实验依赖（词表词库工具）
 ```
@@ -213,11 +222,12 @@ python experiments/qa_lm.py --budget 240 --h 512 --d 128 --m 128 \
 完全不需要反传或近似回投；层堆叠（层监督/FA）在相同预算下均劣于单层。后续：K 调度、
 循环+堆叠混合、GPU 吞吐对照（见 `experiments/deep_bench.py` 复现全部对照）。
 
-### elastic / elasticlinux 分支（1.0.x）—— 弹性深度（LoopFormer 式，零 autograd）
+### elastic / elasticlinux 分支（1.x）—— 弹性深度（零 autograd，一条模型多档预算）
 
-| 版本 | 关键变化 | 验证结果（CPU 500 条同协议，h=192，3000 步，anytime @K=1..6） | 备注 |
+| 版本 | 关键变化 | 验证结果 | 备注 |
 |---|---|---|---|
-| **1.0.0** | [E1] **弹性深度**：每训练步同时走完整路线（K_MAX 次积分，CE）与捷径路线（M~U{1..K_MAX−1} 次积分，CE + 一致性蒸馏 `½‖sem_s−sg(sem_f)‖²`）。stop-grad 天然成立，一致性梯度恰为三因子局部形式；顶部 `LOOP_K_MAX / LOOP_TRAIN_MODE / LOOP_CONSIST_LAMBDA / LOOP_K` 四旋钮 | 一致性：**4.354 / 4.194 / 4.172 / 4.178 / 4.189 / 4.204**；固定 K=4 基线：5.033 / 4.525 / 4.353 / **4.299** / 4.286 / 4.290；随机K仅CE：4.651 / 4.509 / 4.474 / 4.468 / 4.474 / 4.487 | 任何预算全档优于朴素早退；K=2–4 宽平顶；λ∈[1,3] 宽平顶（0.3 偏弱）；训练成本 ≈ 2.2×（consist/random 模式不做 CUDA Graph，自动回退 eager）；本版含 [O11-修] |
+| **1.0.0** | [E1] **弹性深度**：每训练步同时走完整路线（K_MAX 次积分，CE）与捷径路线（M~U{1..K_MAX−1} 次积分，CE + 一致性蒸馏 `½‖sem_s−sg(sem_f)‖²`）。stop-grad 天然成立，一致性梯度恰为三因子局部形式；顶部 `LOOP_K_MAX / LOOP_TRAIN_MODE / LOOP_CONSIST_LAMBDA / LOOP_K` 四旋钮 | CPU 500 条，h=192，3000 步（anytime @K=1..6）：一致性 **4.354 / 4.194 / 4.172 / 4.178 / 4.189 / 4.204**；固定 K=4 基线 5.033 / 4.525 / 4.353 / 4.299 / 4.286 / 4.290；随机K仅CE 4.651 / 4.509 / 4.474 / 4.468 / 4.474 / 4.487 | 小尺度上任何预算全档优于朴素早退；λ∈[1,3] 宽平顶；含 [O11-修] |
+| **1.1.0** | **默认训练模式 consist → random（深度随机化）**：GPU 大尺度(20k 步 h=512)下 random 每步与每墙钟全档最优（K1/K2 3.002/2.846 vs consist 3.306/3.184），成本仅 ~1.07×；consist 降级为小尺度可选模式（负结果记录：λ→0 仍差于 random，更新率减半亦无效） | 240s 同墙钟：52.6k 步 → @K=1 ppl 18.4 / @K=2 **15.86** / @K=3 **15.68**（elite 单层同墙钟 15.54） | 一条模型提供从轻到深的整族预算；复现 `bench_elastic_gpu.py` |
 
 弹性深度的用法：训练完一个模型后，推理时只需改顶部 `LOOP_K`（1..K_MAX 任意），无需重训——
 "一条训练好的网络里住着从 1 层到 K_MAX 层的整族模型"。后续（1.1.x 规划）：自动循环
