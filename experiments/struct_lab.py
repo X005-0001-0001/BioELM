@@ -61,6 +61,7 @@ CFG = {
     'LSM': 0.0,
     'TEACH': 0.0,
     'TEACH_T': 1.0,
+    'SRMS': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -203,9 +204,17 @@ class Net:
             s.copy_(f)
         else:
             fp = None
-        pre = s @ self.Wp.t() + self.bp
+        if CFG['SRMS']:
+            r = s.square().mean(-1, keepdim=True).add(1e-8).sqrt()
+            sn = s / r
+        else:
+            r = None
+            sn = s
+        pre = sn @ self.Wp.t() + self.bp
         self._pre = pre
         self._s = s
+        self._sn = sn
+        self._r = r
         if CFG['RACT'] == 'silu':
             sem = torch.nn.functional.silu(pre)
         else:
@@ -300,6 +309,9 @@ class Net:
             d_act = sem * (1.0 - sem)
         g_sem = (e @ self.head) * d_act
         Ls = g_sem @ self.Wp
+        if self._r is not None:
+            Ls = Ls / self._r - ((self._s * Ls).sum(-1, keepdim=True)
+                                 / (H * self._r ** 3)) * self._s
         g_total = g_sem
         g_head = e.t() @ sem
         g_bout = e.sum(0)
@@ -338,7 +350,7 @@ class Net:
             ('W_d', torch.einsum('bh,bhd->hd', Ls, eK[1])),
             ('b_d', torch.einsum('bh,bh->h', Ls, st['e_bd'])),
             ('B', torch.einsum('bh,bhd->hd', Ls, eK[2])),
-            ('Wp', g_total.t() @ st['s']),
+            ('Wp', g_total.t() @ self._sn),
             ('bp', g_total.sum(0)),
             ('head', g_head),
             ('bout', g_bout),
