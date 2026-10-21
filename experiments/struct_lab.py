@@ -59,6 +59,8 @@ CFG = {
     'EMA': 0.0,
     'XDROP': 0.0,
     'LSM': 0.0,
+    'TEACH': 0.0,
+    'TEACH_T': 1.0,
 }
 DEFAULTS = dict(CFG)
 
@@ -241,11 +243,21 @@ class Net:
         Bn = tok_col.numel()
         ar = torch.arange(Bn, device=DEV)
         p = torch.softmax(logits, dim=-1)
-        e = p
         lsm = CFG['LSM']
-        if lsm > 0.0:
-            e = e - lsm / VOCAB
-        e[ar, tgt_col] = e[ar, tgt_col] - (1.0 - lsm)
+        if CFG['TEACH'] > 0.0 and self._ema is not None:
+            tt = (sem @ self._ema['head'].t() + self._ema['bout']) / CFG['TEACH_T']
+            tgt_soft = torch.softmax(tt, dim=-1)
+            hard = torch.zeros_like(p)
+            hard[ar, tgt_col] = 1.0
+            if lsm > 0.0:
+                hard = hard * (1.0 - lsm) + lsm / VOCAB
+            al = CFG['TEACH']
+            e = p - ((1.0 - al) * hard + al * tgt_soft)
+        else:
+            e = p
+            if lsm > 0.0:
+                e = e - lsm / VOCAB
+            e[ar, tgt_col] = e[ar, tgt_col] - (1.0 - lsm)
         if mask is None:
             e = e / Bn
         else:
