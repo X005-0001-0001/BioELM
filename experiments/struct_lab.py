@@ -56,6 +56,7 @@ CFG = {
     'AUX': 0,
     'AUX_LAM': 0.1,
     'AUX_R': 64,
+    'XSKIP': 0,
 }
 
 NV, TV = 128, 200
@@ -95,6 +96,9 @@ class Net:
         self.b_d = torch.full((H,), math.log(d0 / (1.0 - d0)), device=DEV)
         self.B = (torch.randn(H, D, generator=gen) / math.sqrt(D)).to(DEV)
         self.Wp = ((torch.rand(M, H, generator=gen) * 2 - 1) / math.sqrt(H)).to(DEV)
+        self.Wx = None
+        if CFG['XSKIP']:
+            self.Wx = ((torch.rand(M, D, generator=gen) * 2 - 1) / math.sqrt(D)).to(DEV)
         self.bp = torch.zeros(M, device=DEV)
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
@@ -134,6 +138,8 @@ class Net:
         if CFG['AUX']:
             d['A'] = self.A
             d['C'] = self.C
+        if self.Wx is not None:
+            d['Wx'] = self.Wx
         return d
 
     def n_params(self):
@@ -195,8 +201,11 @@ class Net:
         else:
             fp = None
         pre = s @ self.Wp.t() + self.bp
+        if self.Wx is not None:
+            pre = pre + x @ self.Wx.t()
         self._pre = pre
         self._s = s
+        self._x = x
         if CFG['RACT'] == 'silu':
             sem = torch.nn.functional.silu(pre)
         else:
@@ -300,6 +309,10 @@ class Net:
                 g_d = lam * g2.sum(0)
         g_A = None
         g_C = None
+        if self.Wx is not None:
+            grads_x = [('Wx', g_sem.t() @ self._x)]
+        else:
+            grads_x = []
         if ea is not None:
             al = CFG['AUX_LAM']
             ga_c = ea @ self.C
@@ -326,6 +339,7 @@ class Net:
         if g_A is not None:
             grads.append(('A', g_A))
             grads.append(('C', g_C))
+        grads.extend(grads_x)
         if TCONV > 0:
             gx = torch.einsum('bh,bhd->bd', Ls, st['eX'])
             grads.append(('tconv', (gx.unsqueeze(1) * st['xbuf']).sum(0)))
