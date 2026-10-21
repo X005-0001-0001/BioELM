@@ -58,6 +58,7 @@ CFG = {
     'AUX_R': 64,
     'EMA': 0.0,
 }
+DEFAULTS = dict(CFG)
 
 NV, TV = 128, 200
 CHUNK = 400
@@ -403,6 +404,8 @@ def evaluate(net, ids, mask, ns, T):
 
 def run(cfg):
     global K, MIX, TCONV, H, D, M, SEED
+    CFG.clear()
+    CFG.update(DEFAULTS)
     CFG.update(cfg)
     K, MIX, TCONV = CFG['K'], CFG['MIX'], CFG['TCONV']
     H, D, M, SEED = CFG['h'], CFG['d'], CFG['m'], CFG['seed']
