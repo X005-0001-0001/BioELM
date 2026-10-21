@@ -57,6 +57,7 @@ CFG = {
     'AUX_LAM': 0.1,
     'AUX_R': 64,
     'EMA': 0.0,
+    'XDROP': 0.0,
 }
 DEFAULTS = dict(CFG)
 
@@ -227,6 +228,9 @@ class Net:
     @torch.no_grad()
     def step(self, tok_col, tgt_col, st, train=True, mask=None, tgt2_col=None):
         x = self._input(self.E[tok_col], st)
+        if train and CFG['XDROP'] > 0.0:
+            keep = (torch.rand_like(x) > CFG['XDROP']).to(x.dtype)
+            x = x * keep / (1.0 - CFG['XDROP'])
         for k in range(K):
             if k > 0:
                 self._mix(st, k)
