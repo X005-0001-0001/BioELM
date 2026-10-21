@@ -53,6 +53,9 @@ CFG = {
     'LR_S': 1.0,
     'LR_R': 1.0,
     'RACT': 'sig',
+    'AUX': 0,
+    'AUX_LAM': 0.1,
+    'AUX_R': 64,
 }
 
 NV, TV = 128, 200
@@ -99,6 +102,12 @@ class Net:
         if CFG['MTP'] and CFG['MTP_SEP']:
             self.head2 = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
             self.bout2 = torch.zeros(VOCAB, device=DEV)
+        self.A = None
+        if CFG['AUX']:
+            self.A = ((torch.rand(CFG['AUX_R'], H, generator=gen) * 2 - 1)
+                      / math.sqrt(H)).to(DEV)
+            self.C = ((torch.rand(VOCAB, CFG['AUX_R'], generator=gen) * 2 - 1)
+                      / math.sqrt(CFG['AUX_R'])).to(DEV)
         self.tconv = None
         if TCONV > 0:
             self.tconv = torch.zeros(TCONV, D, device=DEV)
@@ -122,6 +131,9 @@ class Net:
         if CFG['MTP'] and CFG['MTP_SEP']:
             d['head2'] = self.head2
             d['bout2'] = self.bout2
+        if CFG['AUX']:
+            d['A'] = self.A
+            d['C'] = self.C
         return d
 
     def n_params(self):
@@ -184,6 +196,7 @@ class Net:
             fp = None
         pre = s @ self.Wp.t() + self.bp
         self._pre = pre
+        self._s = s
         if CFG['RACT'] == 'silu':
             sem = torch.nn.functional.silu(pre)
         else:
@@ -225,6 +238,17 @@ class Net:
         else:
             mm = mask.to(e.dtype).unsqueeze(1)
             e = e * mm / mm.sum().clamp(min=1.0)
+        ea = None
+        if CFG['AUX']:
+            la = (self._s @ self.A.t()) @ self.C.t()
+            pa = torch.softmax(la, dim=-1)
+            ea = pa
+            ea[ar, tgt_col] = ea[ar, tgt_col] - 1.0
+            if mask is None:
+                ea = ea / Bn
+            else:
+                ma = mask.to(ea.dtype).unsqueeze(1)
+                ea = ea * ma / ma.sum().clamp(min=1.0)
         e2 = None
         if CFG['MTP'] and tgt2_col is not None:
             if CFG['MTP_SEP']:
@@ -239,11 +263,11 @@ class Net:
             else:
                 mm2 = mask.to(e2.dtype).unsqueeze(1)
                 e2 = e2 * mm2 / mm2.sum().clamp(min=1.0)
-        self._learn(sem, st, e, e2)
+        self._learn(sem, st, e, e2, ea)
         return logits
 
     @torch.no_grad()
-    def _learn(self, sem, st, e, e2=None):
+    def _learn(self, sem, st, e, e2=None, ea=None):
         if CFG['RACT'] == 'silu':
             sg = torch.sigmoid(self._pre)
             d_act = sg * (1.0 + self._pre * (1.0 - sg))
@@ -274,6 +298,14 @@ class Net:
                 g_head = g_head + lam * (e2.t() @ (sem + self.mtp_d))
                 g_bout = g_bout + lam * e2.sum(0)
                 g_d = lam * g2.sum(0)
+        g_A = None
+        g_C = None
+        if ea is not None:
+            al = CFG['AUX_LAM']
+            ga_c = ea @ self.C
+            Ls = Ls + al * (ga_c @ self.A)
+            g_A = al * (ga_c.t() @ self._s)
+            g_C = al * (ea.t() @ (self._s @ self.A.t()))
         eK = st['eK']
         grads = [
             ('W_g', torch.einsum('bh,bhd->hd', Ls, eK[0])),
@@ -291,6 +323,9 @@ class Net:
         if g_head2 is not None:
             grads.append(('head2', g_head2))
             grads.append(('bout2', g_bout2))
+        if g_A is not None:
+            grads.append(('A', g_A))
+            grads.append(('C', g_C))
         if TCONV > 0:
             gx = torch.einsum('bh,bhd->bd', Ls, st['eX'])
             grads.append(('tconv', (gx.unsqueeze(1) * st['xbuf']).sum(0)))
