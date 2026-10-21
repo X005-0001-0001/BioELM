@@ -49,6 +49,7 @@ CFG = {
     'SACT': 'none',
     'ETA_SCHED': 'const',
     'ETA_MIN': 0.1,
+    'ELRN': 0,
 }
 
 NV, TV = 128, 200
@@ -132,6 +133,7 @@ class Net:
         }
         if TCONV > 0:
             st['xbuf'] = torch.zeros(batch, TCONV, D, device=DEV)
+        if TCONV > 0 or CFG['ELRN']:
             st['eX'] = torch.zeros(batch, H, D, device=DEV)
         return st
 
@@ -189,7 +191,7 @@ class Net:
                 st['eK'].mul_(fp.unsqueeze(0).unsqueeze(-1))
                 st['e_bg'].mul_(fp)
                 st['e_bd'].mul_(fp)
-            if TCONV > 0:
+            if 'eX' in st:
                 st['eX'].mul_(d.unsqueeze(-1))
                 st['eX'].add_(c_g.unsqueeze(-1) * self.W_g
                               + c_d.unsqueeze(-1) * self.W_d
@@ -229,11 +231,11 @@ class Net:
             else:
                 mm2 = mask.to(e2.dtype).unsqueeze(1)
                 e2 = e2 * mm2 / mm2.sum().clamp(min=1.0)
-        self._learn(sem, st, e, e2)
+        self._learn(sem, st, e, e2, tok_col)
         return logits
 
     @torch.no_grad()
-    def _learn(self, sem, st, e, e2=None):
+    def _learn(self, sem, st, e, e2=None, tok=None):
         g_sem = (e @ self.head) * (sem * (1.0 - sem))
         Ls = g_sem @ self.Wp
         g_total = g_sem
@@ -279,10 +281,13 @@ class Net:
         if TCONV > 0:
             gx = torch.einsum('bh,bhd->bd', Ls, st['eX'])
             grads.append(('tconv', (gx.unsqueeze(1) * st['xbuf']).sum(0)))
-        self._apply(grads)
+        gE = None
+        if CFG['ELRN']:
+            gE = torch.einsum('bh,bhd->bd', Ls, st['eX'])
+        self._apply(grads, gE, tok)
 
     @torch.no_grad()
-    def _apply(self, grads):
+    def _apply(self, grads, gE=None, tok=None):
         self.t += 1
         b1c = 1.0 - CFG['b1'] ** self.t
         b2c = 1.0 - CFG['b2'] ** self.t
@@ -308,6 +313,18 @@ class Net:
             eta = eta * (CFG['ETA_MIN'] + (1.0 - CFG['ETA_MIN'])
                          * 0.5 * (1.0 + math.cos(math.pi * frac)))
         torch._foreach_add_(ps, upd, alpha=-eta)
+        if gE is not None and tok is not None:
+            uniq, inv = torch.unique(tok, return_inverse=True)
+            g = torch.zeros(uniq.numel(), D, device=DEV).index_add_(0, inv, gE)
+            if not hasattr(self, '_mE'):
+                self._mE = torch.zeros(VOCAB, D, device=DEV)
+                self._vE = torch.zeros(VOCAB, D, device=DEV)
+            mE = self._mE[uniq] * CFG['b1'] + (1.0 - CFG['b1']) * g
+            vE = self._vE[uniq] * CFG['b2'] + (1.0 - CFG['b2']) * g * g
+            self._mE[uniq] = mE
+            self._vE[uniq] = vE
+            updE = (mE / b1c) / (torch.sqrt(vE / b2c) + CFG['eps'])
+            self.E.index_add_(0, uniq, updE, alpha=-eta)
 
 
 def to_batches(ids, mask, ns, T, rotate):
