@@ -43,6 +43,8 @@ CFG = {
     'eps': 1e-6,
     'seed': 43,
     'TAU': 1.0,
+    'MTP': 0,
+    'MTP_LAMBDA': 0.5,
 }
 
 NV, TV = 128, 200
@@ -85,6 +87,7 @@ class Net:
         self.bp = torch.zeros(M, device=DEV)
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
+        self.mtp_d = torch.zeros(M, device=DEV)
         self.tconv = None
         if TCONV > 0:
             self.tconv = torch.zeros(TCONV, D, device=DEV)
@@ -103,6 +106,8 @@ class Net:
              'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head, 'bout': self.bout}
         if self.tconv is not None:
             d['tconv'] = self.tconv
+        if CFG['MTP']:
+            d['mtp_d'] = self.mtp_d
         return d
 
     def n_params(self):
@@ -172,7 +177,7 @@ class Net:
         return logits, sem
 
     @torch.no_grad()
-    def step(self, tok_col, tgt_col, st, train=True, mask=None):
+    def step(self, tok_col, tgt_col, st, train=True, mask=None, tgt2_col=None):
         x = self._input(self.E[tok_col], st)
         for k in range(K):
             if k > 0:
@@ -190,13 +195,37 @@ class Net:
         else:
             mm = mask.to(e.dtype).unsqueeze(1)
             e = e * mm / mm.sum().clamp(min=1.0)
-        self._learn(sem, st, e)
+        e2 = None
+        if CFG['MTP'] and tgt2_col is not None:
+            logits2 = (sem + self.mtp_d) @ self.head.t() + self.bout
+            p2 = torch.softmax(logits2, dim=-1)
+            e2 = p2
+            e2[ar, tgt2_col] = e2[ar, tgt2_col] - 1.0
+            if mask is None:
+                e2 = e2 / Bn
+            else:
+                mm2 = mask.to(e2.dtype).unsqueeze(1)
+                e2 = e2 * mm2 / mm2.sum().clamp(min=1.0)
+        self._learn(sem, st, e, e2)
         return logits
 
     @torch.no_grad()
-    def _learn(self, sem, st, e):
+    def _learn(self, sem, st, e, e2=None):
         g_sem = (e @ self.head) * (sem * (1.0 - sem))
         Ls = g_sem @ self.Wp
+        g_total = g_sem
+        g_head = e.t() @ sem
+        g_bout = e.sum(0)
+        g_d = None
+        if e2 is not None:
+            lam = CFG['MTP_LAMBDA']
+            g2 = e2 @ self.head
+            g_sem2 = g2 * (sem * (1.0 - sem))
+            Ls = Ls + lam * (g_sem2 @ self.Wp)
+            g_total = g_sem + lam * g_sem2
+            g_head = g_head + lam * (e2.t() @ (sem + self.mtp_d))
+            g_bout = g_bout + lam * e2.sum(0)
+            g_d = lam * g2.sum(0)
         eK = st['eK']
         grads = [
             ('W_g', torch.einsum('bh,bhd->hd', Ls, eK[0])),
@@ -204,11 +233,13 @@ class Net:
             ('W_d', torch.einsum('bh,bhd->hd', Ls, eK[1])),
             ('b_d', torch.einsum('bh,bh->h', Ls, st['e_bd'])),
             ('B', torch.einsum('bh,bhd->hd', Ls, eK[2])),
-            ('Wp', g_sem.t() @ st['s']),
-            ('bp', g_sem.sum(0)),
-            ('head', e.t() @ sem),
-            ('bout', e.sum(0)),
+            ('Wp', g_total.t() @ st['s']),
+            ('bp', g_total.sum(0)),
+            ('head', g_head),
+            ('bout', g_bout),
         ]
+        if g_d is not None:
+            grads.append(('mtp_d', g_d))
         if TCONV > 0:
             gx = torch.einsum('bh,bhd->bd', Ls, st['eX'])
             grads.append(('tconv', (gx.unsqueeze(1) * st['xbuf']).sum(0)))
@@ -239,11 +270,12 @@ class Net:
 
 
 def to_batches(ids, mask, ns, T, rotate):
-    s = torch.tensor(ids[rotate:rotate + ns * T + 1])
-    st = s[:-1].view(ns, T).t().contiguous().to(DEV)
-    tg = s[1:].view(ns, T).t().contiguous().to(DEV)
+    s = torch.tensor(ids[rotate:rotate + ns * T + 2])
+    st = s[:-2].view(ns, T).t().contiguous().to(DEV)
+    tg = s[1:-1].view(ns, T).t().contiguous().to(DEV)
+    tg2 = s[2:].view(ns, T).t().contiguous().to(DEV)
     mk = torch.tensor(mask[rotate + 1:rotate + ns * T + 1], dtype=torch.float32).view(ns, T).t().contiguous().to(DEV)
-    return st, tg, mk
+    return st, tg, mk, tg2
 
 
 @torch.no_grad()
@@ -280,9 +312,10 @@ def run(cfg):
     rot = 0
     t0 = time.time()
     while done < CFG['steps']:
-        bt, bg, bm = to_batches(tr_ids, tr_mask, n, CHUNK, rot)
+        bt, bg, bm, bg2 = to_batches(tr_ids, tr_mask, n, CHUNK, rot)
         for s in range(bt.shape[0]):
-            net.step(bt[s], bg[s], st, train=True, mask=bm[s])
+            net.step(bt[s], bg[s], st, train=True, mask=bm[s],
+                     tgt2_col=(bg2[s] if CFG['MTP'] else None))
             done += 1
             if done in marks:
                 out[done] = evaluate(net, va_ids, va_mask, NV, TV)
