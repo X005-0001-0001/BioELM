@@ -47,6 +47,8 @@ CFG = {
     'MTP_LAMBDA': 0.5,
     'MTP_SEP': 0,
     'SACT': 'none',
+    'ETA_SCHED': 'const',
+    'ETA_MIN': 0.1,
 }
 
 NV, TV = 128, 200
@@ -300,7 +302,12 @@ class Net:
         p2 = [p for p in ps if p.dim() == 2]
         if p2:
             torch._foreach_mul_(p2, 1.0 - CFG['wd'])
-        torch._foreach_add_(ps, upd, alpha=-CFG['eta'])
+        eta = CFG['eta']
+        if CFG['ETA_SCHED'] == 'cosine':
+            frac = min(1.0, self.t / max(1, CFG['steps']))
+            eta = eta * (CFG['ETA_MIN'] + (1.0 - CFG['ETA_MIN'])
+                         * 0.5 * (1.0 + math.cos(math.pi * frac)))
+        torch._foreach_add_(ps, upd, alpha=-eta)
 
 
 def to_batches(ids, mask, ns, T, rotate):
