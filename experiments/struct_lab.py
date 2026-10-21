@@ -56,6 +56,7 @@ CFG = {
     'AUX': 0,
     'AUX_LAM': 0.1,
     'AUX_R': 64,
+    'PRIO': 0.0,
 }
 
 NV, TV = 128, 200
@@ -238,6 +239,12 @@ class Net:
         else:
             mm = mask.to(e.dtype).unsqueeze(1)
             e = e * mm / mm.sum().clamp(min=1.0)
+        if CFG['PRIO'] > 0.0:
+            nll_b = (torch.logsumexp(logits, dim=-1)
+                     - logits.gather(1, tgt_col.view(-1, 1)).squeeze(1))
+            rel = nll_b / nll_b.mean().clamp(min=1e-6)
+            w = 1.0 + CFG['PRIO'] * torch.tanh(rel - 1.0)
+            e = e * w.unsqueeze(1)
         ea = None
         if CFG['AUX']:
             la = (self._s @ self.A.t()) @ self.C.t()
