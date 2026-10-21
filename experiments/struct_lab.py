@@ -45,6 +45,7 @@ CFG = {
     'TAU': 1.0,
     'MTP': 0,
     'MTP_LAMBDA': 0.5,
+    'MTP_SEP': 0,
 }
 
 NV, TV = 128, 200
@@ -88,6 +89,9 @@ class Net:
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
         self.mtp_d = torch.zeros(M, device=DEV)
+        if CFG['MTP'] and CFG['MTP_SEP']:
+            self.head2 = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
+            self.bout2 = torch.zeros(VOCAB, device=DEV)
         self.tconv = None
         if TCONV > 0:
             self.tconv = torch.zeros(TCONV, D, device=DEV)
@@ -108,6 +112,9 @@ class Net:
             d['tconv'] = self.tconv
         if CFG['MTP']:
             d['mtp_d'] = self.mtp_d
+        if CFG['MTP'] and CFG['MTP_SEP']:
+            d['head2'] = self.head2
+            d['bout2'] = self.bout2
         return d
 
     def n_params(self):
@@ -197,7 +204,10 @@ class Net:
             e = e * mm / mm.sum().clamp(min=1.0)
         e2 = None
         if CFG['MTP'] and tgt2_col is not None:
-            logits2 = (sem + self.mtp_d) @ self.head.t() + self.bout
+            if CFG['MTP_SEP']:
+                logits2 = sem @ self.head2.t() + self.bout2
+            else:
+                logits2 = (sem + self.mtp_d) @ self.head.t() + self.bout
             p2 = torch.softmax(logits2, dim=-1)
             e2 = p2
             e2[ar, tgt2_col] = e2[ar, tgt2_col] - 1.0
@@ -217,15 +227,25 @@ class Net:
         g_head = e.t() @ sem
         g_bout = e.sum(0)
         g_d = None
+        g_head2 = None
+        g_bout2 = None
         if e2 is not None:
             lam = CFG['MTP_LAMBDA']
-            g2 = e2 @ self.head
-            g_sem2 = g2 * (sem * (1.0 - sem))
-            Ls = Ls + lam * (g_sem2 @ self.Wp)
-            g_total = g_sem + lam * g_sem2
-            g_head = g_head + lam * (e2.t() @ (sem + self.mtp_d))
-            g_bout = g_bout + lam * e2.sum(0)
-            g_d = lam * g2.sum(0)
+            if CFG['MTP_SEP']:
+                g2 = e2 @ self.head2
+                g_sem2 = g2 * (sem * (1.0 - sem))
+                Ls = Ls + lam * (g_sem2 @ self.Wp)
+                g_total = g_sem + lam * g_sem2
+                g_head2 = lam * (e2.t() @ sem)
+                g_bout2 = lam * e2.sum(0)
+            else:
+                g2 = e2 @ self.head
+                g_sem2 = g2 * (sem * (1.0 - sem))
+                Ls = Ls + lam * (g_sem2 @ self.Wp)
+                g_total = g_sem + lam * g_sem2
+                g_head = g_head + lam * (e2.t() @ (sem + self.mtp_d))
+                g_bout = g_bout + lam * e2.sum(0)
+                g_d = lam * g2.sum(0)
         eK = st['eK']
         grads = [
             ('W_g', torch.einsum('bh,bhd->hd', Ls, eK[0])),
@@ -240,6 +260,9 @@ class Net:
         ]
         if g_d is not None:
             grads.append(('mtp_d', g_d))
+        if g_head2 is not None:
+            grads.append(('head2', g_head2))
+            grads.append(('bout2', g_bout2))
         if TCONV > 0:
             gx = torch.einsum('bh,bhd->bd', Ls, st['eX'])
             grads.append(('tconv', (gx.unsqueeze(1) * st['xbuf']).sum(0)))
