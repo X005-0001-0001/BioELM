@@ -46,6 +46,7 @@ CFG = {
     'MTP': 0,
     'MTP_LAMBDA': 0.5,
     'MTP_SEP': 0,
+    'SACT': 'none',
 }
 
 NV, TV = 128, 200
@@ -169,6 +170,12 @@ class Net:
             c_g = (g * (1.0 - g)) * u_raw
             c_d = (d * (1.0 - d)) * s
         s.mul_(d).add_(u)
+        if CFG['SACT'] == 'tanh':
+            f = torch.tanh(s)
+            fp = 1.0 - f * f
+            s.copy_(f)
+        else:
+            fp = None
         sem = torch.sigmoid(s @ self.Wp.t() + self.bp)
         logits = sem @ self.head.t() + self.bout
         if trace:
@@ -176,6 +183,10 @@ class Net:
             st['eK'].addcmul_(torch.stack((c_g, c_d, g), 0).unsqueeze(-1), x.unsqueeze(0).unsqueeze(2))
             st['e_bg'].mul_(d).add_(c_g)
             st['e_bd'].mul_(d).add_(c_d)
+            if fp is not None:
+                st['eK'].mul_(fp.unsqueeze(0).unsqueeze(-1))
+                st['e_bg'].mul_(fp)
+                st['e_bd'].mul_(fp)
             if TCONV > 0:
                 st['eX'].mul_(d.unsqueeze(-1))
                 st['eX'].add_(c_g.unsqueeze(-1) * self.W_g
