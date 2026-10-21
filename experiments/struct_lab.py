@@ -56,6 +56,7 @@ CFG = {
     'AUX': 0,
     'AUX_LAM': 0.1,
     'AUX_R': 64,
+    'EMA': 0.0,
 }
 
 NV, TV = 128, 200
@@ -120,6 +121,9 @@ class Net:
         self.t = 0
         self._meta = {k: (torch.zeros_like(v), torch.zeros_like(v))
                       for k, v in self.params().items()}
+        self._ema = None
+        if CFG['EMA'] > 0.0:
+            self._ema = {k: v.detach().clone() for k, v in self.params().items()}
 
     def params(self):
         d = {'W_g': self.W_g, 'b_g': self.b_g, 'W_d': self.W_d, 'b_d': self.b_d,
@@ -362,6 +366,10 @@ class Net:
         for i, n in enumerate(names):
             e = eta_r if n in ('Wp', 'bp', 'head', 'bout') else eta_s
             ps[i].add_(upd[i], alpha=-e)
+        if self._ema is not None:
+            b = CFG['EMA']
+            for k, p in self.params().items():
+                self._ema[k].mul_(b).add_(p, alpha=1.0 - b)
 
 
 def to_batches(ids, mask, ns, T, rotate):
@@ -413,7 +421,15 @@ def run(cfg):
                      tgt2_col=(bg2[s] if CFG['MTP'] else None))
             done += 1
             if done in marks:
-                out[done] = evaluate(net, va_ids, va_mask, NV, TV)
+                if net._ema is not None:
+                    cur = {k: v.detach().clone() for k, v in net.params().items()}
+                    for k, v in net.params().items():
+                        v.copy_(net._ema[k])
+                    out[done] = evaluate(net, va_ids, va_mask, NV, TV)
+                    for k, v in net.params().items():
+                        v.copy_(cur[k])
+                else:
+                    out[done] = evaluate(net, va_ids, va_mask, NV, TV)
                 print('  step %d: valCE=%.4f ppl=%.2f (%.0fs)'
                       % (done, out[done], math.exp(out[done]), time.time() - t0), flush=True)
             if done >= CFG['steps']:
