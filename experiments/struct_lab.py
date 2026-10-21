@@ -58,6 +58,7 @@ CFG = {
     'AUX_R': 64,
     'EMA': 0.0,
     'XDROP': 0.0,
+    'LSM': 0.0,
 }
 DEFAULTS = dict(CFG)
 
@@ -241,7 +242,10 @@ class Net:
         ar = torch.arange(Bn, device=DEV)
         p = torch.softmax(logits, dim=-1)
         e = p
-        e[ar, tgt_col] = e[ar, tgt_col] - 1.0
+        lsm = CFG['LSM']
+        if lsm > 0.0:
+            e = e - lsm / VOCAB
+        e[ar, tgt_col] = e[ar, tgt_col] - (1.0 - lsm)
         if mask is None:
             e = e / Bn
         else:
