@@ -63,6 +63,7 @@ CFG = {
     'TEACH_T': 1.0,
     'SRMS': 0,
     'XNRM': 0,
+    'SGAIN': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -106,6 +107,7 @@ class Net:
         self.bp = torch.zeros(M, device=DEV)
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
+        self.gm = torch.ones(H, device=DEV)
         self.mtp_d = torch.zeros(M, device=DEV)
         if CFG['MTP'] and CFG['MTP_SEP']:
             self.head2 = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
@@ -135,6 +137,8 @@ class Net:
     def params(self):
         d = {'W_g': self.W_g, 'b_g': self.b_g, 'W_d': self.W_d, 'b_d': self.b_d,
              'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head, 'bout': self.bout}
+        if CFG['SGAIN']:
+            d['gm'] = self.gm
         if self.tconv is not None:
             d['tconv'] = self.tconv
         if CFG['MTP']:
@@ -213,6 +217,9 @@ class Net:
         else:
             r = None
             sn = s
+        self._sn0 = sn
+        if CFG['SGAIN']:
+            sn = sn * self.gm
         pre = sn @ self.Wp.t() + self.bp
         self._pre = pre
         self._s = s
@@ -312,6 +319,10 @@ class Net:
             d_act = sem * (1.0 - sem)
         g_sem = (e @ self.head) * d_act
         Ls = g_sem @ self.Wp
+        gg = None
+        if CFG['SGAIN']:
+            gg = Ls * self._sn0
+            Ls = Ls * self.gm
         if self._r is not None:
             Ls = Ls / self._r - ((self._s * Ls).sum(-1, keepdim=True)
                                  / (H * self._r ** 3)) * self._s
@@ -358,6 +369,8 @@ class Net:
             ('head', g_head),
             ('bout', g_bout),
         ]
+        if CFG['SGAIN']:
+            grads.append(('gm', gg.sum(0)))
         if g_d is not None:
             grads.append(('mtp_d', g_d))
         if g_head2 is not None:
