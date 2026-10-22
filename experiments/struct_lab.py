@@ -62,6 +62,7 @@ CFG = {
     'TEACH': 0.0,
     'TEACH_T': 1.0,
     'SRMS': 0,
+    'XNRM': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -189,6 +190,8 @@ class Net:
 
     @torch.no_grad()
     def _cell(self, x, st, trace):
+        if CFG['XNRM']:
+            x = x / x.square().mean(-1, keepdim=True).add(1e-8).sqrt()
         g = torch.sigmoid(x @ self.W_g.t() + self.b_g)
         d = torch.sigmoid(x @ self.W_d.t() + self.b_d)
         u_raw = x @ self.B.t()
