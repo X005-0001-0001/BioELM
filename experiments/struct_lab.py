@@ -64,6 +64,7 @@ CFG = {
     'SRMS': 0,
     'XNRM': 0,
     'SGAIN': 0,
+    'RESET': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -89,6 +90,7 @@ P.LOG_FILE = os.path.join(os.environ.get('TEMP', '.'), 'struct_lab.log')
 P.init_log_file()
 tok, _ = P._load_any_tokenizer()
 VOCAB = tok.vocab_size
+BOS_ID = tok.bos_token_id
 DATA = os.environ.get('BIO_DEEP_DATA', os.path.join(BASE, 'dsr1_v5_0001.jsonl'))
 tr_ids, tr_mask, va_ids, va_mask = P.build_corpus(tok, DATA)
 
@@ -249,6 +251,16 @@ class Net:
 
     @torch.no_grad()
     def step(self, tok_col, tgt_col, st, train=True, mask=None, tgt2_col=None):
+        if CFG['RESET']:
+            r = (tok_col == BOS_ID)
+            if r.any():
+                st['s'][r] = 0
+                st['eK'][:, r] = 0
+                st['e_bg'][r] = 0
+                st['e_bd'][r] = 0
+                if TCONV > 0:
+                    st['xbuf'][r] = 0
+                    st['eX'][r] = 0
         x = self._input(self.E[tok_col], st)
         if train and CFG['XDROP'] > 0.0:
             keep = (torch.rand_like(x) > CFG['XDROP']).to(x.dtype)
