@@ -65,6 +65,7 @@ CFG = {
     'XNRM': 0,
     'SGAIN': 0,
     'RESET': 0,
+    'XSKIP': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -111,6 +112,7 @@ class Net:
         self.bout = torch.zeros(VOCAB, device=DEV)
         self.gm = torch.ones(H, device=DEV)
         self.mtp_d = torch.zeros(M, device=DEV)
+        self.Wskip = torch.zeros(VOCAB, D, device=DEV) if CFG['XSKIP'] else None
         if CFG['MTP'] and CFG['MTP_SEP']:
             self.head2 = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
             self.bout2 = torch.zeros(VOCAB, device=DEV)
@@ -141,6 +143,8 @@ class Net:
              'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head, 'bout': self.bout}
         if CFG['SGAIN']:
             d['gm'] = self.gm
+        if CFG['XSKIP']:
+            d['Wskip'] = self.Wskip
         if self.tconv is not None:
             d['tconv'] = self.tconv
         if CFG['MTP']:
@@ -227,11 +231,14 @@ class Net:
         self._s = s
         self._sn = sn
         self._r = r
+        self._x = x
         if CFG['RACT'] == 'silu':
             sem = torch.nn.functional.silu(pre)
         else:
             sem = torch.sigmoid(pre)
         logits = sem @ self.head.t() + self.bout
+        if CFG['XSKIP']:
+            logits = logits + x @ self.Wskip.t()
         if trace:
             lam = CFG['TRACE_LAM']
             st['eK'].mul_(d.unsqueeze(-1).unsqueeze(0)).mul_(lam)
@@ -381,6 +388,8 @@ class Net:
             ('head', g_head),
             ('bout', g_bout),
         ]
+        if CFG['XSKIP']:
+            grads.append(('Wskip', e.t() @ self._x))
         if CFG['SGAIN']:
             grads.append(('gm', gg.sum(0)))
         if g_d is not None:
