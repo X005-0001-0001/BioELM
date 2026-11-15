@@ -66,6 +66,7 @@ CFG = {
     'SGAIN': 0,
     'RESET': 0,
     'XSKIP': 0,
+    'COSHEAD': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -111,6 +112,7 @@ class Net:
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
         self.bout = torch.zeros(VOCAB, device=DEV)
         self.gm = torch.ones(H, device=DEV)
+        self.hg = self.head.norm(dim=1).clamp_min(1e-3)
         self.mtp_d = torch.zeros(M, device=DEV)
         self.Wskip = torch.zeros(VOCAB, D, device=DEV) if CFG['XSKIP'] else None
         if CFG['MTP'] and CFG['MTP_SEP']:
@@ -143,6 +145,8 @@ class Net:
              'B': self.B, 'Wp': self.Wp, 'bp': self.bp, 'head': self.head, 'bout': self.bout}
         if CFG['SGAIN']:
             d['gm'] = self.gm
+        if CFG['COSHEAD']:
+            d['hg'] = self.hg
         if CFG['XSKIP']:
             d['Wskip'] = self.Wskip
         if self.tconv is not None:
@@ -236,7 +240,17 @@ class Net:
             sem = torch.nn.functional.silu(pre)
         else:
             sem = torch.sigmoid(pre)
-        logits = sem @ self.head.t() + self.bout
+        if CFG['COSHEAD']:
+            hs = self.head.norm(dim=1, keepdim=True).add(1e-8)
+            hu = self.head / hs
+            hn = hu * self.hg.unsqueeze(1)
+        else:
+            hs = hu = None
+            hn = self.head
+        self._hn = hn
+        self._hu = hu
+        self._hs = hs
+        logits = sem @ hn.t() + self.bout
         if CFG['XSKIP']:
             logits = logits + x @ self.Wskip.t()
         if trace:
@@ -336,7 +350,7 @@ class Net:
             d_act = sg * (1.0 + self._pre * (1.0 - sg))
         else:
             d_act = sem * (1.0 - sem)
-        g_sem = (e @ self.head) * d_act
+        g_sem = (e @ self._hn) * d_act
         Ls = g_sem @ self.Wp
         gg = None
         if CFG['SGAIN']:
@@ -376,6 +390,11 @@ class Net:
             Ls = Ls + al * (ga_c @ self.A)
             g_A = al * (ga_c.t() @ self._s)
             g_C = al * (ea.t() @ (self._s @ self.A.t()))
+        g_hg = None
+        if CFG['COSHEAD']:
+            g_hu = g_head * self.hg.unsqueeze(1)
+            g_hg = (g_head * self._hu).sum(1)
+            g_head = (g_hu - (g_hu * self._hu).sum(1, keepdim=True) * self._hu) / self._hs
         eK = st['eK']
         grads = [
             ('W_g', torch.einsum('bh,bhd->hd', Ls, eK[0])),
@@ -388,6 +407,8 @@ class Net:
             ('head', g_head),
             ('bout', g_bout),
         ]
+        if CFG['COSHEAD']:
+            grads.append(('hg', g_hg))
         if CFG['XSKIP']:
             grads.append(('Wskip', e.t() @ self._x))
         if CFG['SGAIN']:
