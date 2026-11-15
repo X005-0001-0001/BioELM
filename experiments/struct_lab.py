@@ -68,6 +68,7 @@ CFG = {
     'XSKIP': 0,
     'COSHEAD': 0,
     'LSMP': 0,
+    'UNIB': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -114,7 +115,11 @@ class Net:
         self.Wp = ((torch.rand(M, H, generator=gen) * 2 - 1) / math.sqrt(H)).to(DEV)
         self.bp = torch.zeros(M, device=DEV)
         self.head = ((torch.rand(VOCAB, M, generator=gen) * 2 - 1) / math.sqrt(M)).to(DEV)
-        self.bout = torch.zeros(VOCAB, device=DEV)
+        if CFG['UNIB']:
+            lb = PRIOR.log()
+            self.bout = (lb - lb.mean()).to(DEV)
+        else:
+            self.bout = torch.zeros(VOCAB, device=DEV)
         self.gm = torch.ones(H, device=DEV)
         self.hg = self.head.norm(dim=1).clamp_min(1e-3)
         self.mtp_d = torch.zeros(M, device=DEV)
