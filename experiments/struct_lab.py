@@ -67,6 +67,7 @@ CFG = {
     'RESET': 0,
     'XSKIP': 0,
     'COSHEAD': 0,
+    'LSMP': 0,
 }
 DEFAULTS = dict(CFG)
 
@@ -95,6 +96,9 @@ VOCAB = tok.vocab_size
 BOS_ID = tok.bos_token_id
 DATA = os.environ.get('BIO_DEEP_DATA', os.path.join(BASE, 'dsr1_v5_0001.jsonl'))
 tr_ids, tr_mask, va_ids, va_mask = P.build_corpus(tok, DATA)
+_lab_t = tr_ids.flatten() if hasattr(tr_ids, 'flatten') else torch.tensor(tr_ids)
+_c = torch.bincount(_lab_t.long(), minlength=VOCAB).float() + 1.0
+PRIOR = (_c / _c.sum()).to(DEV)
 
 
 class Net:
@@ -302,13 +306,19 @@ class Net:
             hard = torch.zeros_like(p)
             hard[ar, tgt_col] = 1.0
             if lsm > 0.0:
-                hard = hard * (1.0 - lsm) + lsm / VOCAB
+                if CFG['LSMP']:
+                    hard = hard * (1.0 - lsm) + lsm * PRIOR.unsqueeze(0)
+                else:
+                    hard = hard * (1.0 - lsm) + lsm / VOCAB
             al = CFG['TEACH']
             e = p - ((1.0 - al) * hard + al * tgt_soft)
         else:
             e = p
             if lsm > 0.0:
-                e = e - lsm / VOCAB
+                if CFG['LSMP']:
+                    e = e - lsm * PRIOR
+                else:
+                    e = e - lsm / VOCAB
             e[ar, tgt_col] = e[ar, tgt_col] - (1.0 - lsm)
         if mask is None:
             e = e / Bn
